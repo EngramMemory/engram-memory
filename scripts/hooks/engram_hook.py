@@ -176,8 +176,117 @@ def handle_session_start(data):
 
 
 def handle_stop(data):
-    """Wave 3 will implement transcript parsing here."""
-    pass
+    """Parse session transcript and store a structured summary."""
+    import re
+    from collections import Counter
+
+    session_id = data.get("session_id", "unknown")
+    transcript_path = data.get("transcript_path", "")
+
+    if not transcript_path or not os.path.exists(transcript_path):
+        return
+
+    files_modified = set()
+    files_created = set()
+    commands_run = []
+    errors = []
+    tool_counts = Counter()
+    user_messages = []
+    decisions = []
+    line_count = 0
+
+    decision_re = re.compile(
+        r"\b(let's|we should|go with|use|switch to|pick|choose|decided|approved)\b",
+        re.IGNORECASE,
+    )
+    error_keywords = {"error", "failed", "traceback", "exception", "denied"}
+
+    try:
+        with open(transcript_path, "r") as f:
+            for line in f:
+                line_count += 1
+                try:
+                    entry = json.loads(line)
+                except (json.JSONDecodeError, ValueError):
+                    continue
+
+                msg_type = entry.get("type", "")
+
+                if msg_type == "tool_use":
+                    tool = entry.get("name", "")
+                    tool_counts[tool] += 1
+                    inp = entry.get("input", {})
+
+                    if tool in ("Edit", "MultiEdit"):
+                        fp = inp.get("file_path", "")
+                        if fp:
+                            files_modified.add(fp)
+                    elif tool == "Write":
+                        fp = inp.get("file_path", "")
+                        if fp:
+                            files_created.add(fp)
+                    elif tool == "Bash":
+                        cmd = inp.get("command", "")
+                        if cmd and len(cmd) > 4:
+                            commands_run.append(cmd[:120])
+
+                elif msg_type == "human":
+                    text = entry.get("content", "")
+                    if isinstance(text, str) and len(text) > 10:
+                        user_messages.append(text[:200])
+                        if decision_re.search(text):
+                            decisions.append(text[:150])
+
+                elif msg_type == "tool_result":
+                    content = str(entry.get("content", ""))
+                    content_lower = content.lower()
+                    if any(kw in content_lower for kw in error_keywords):
+                        errors.append(content[:150])
+
+    except (OSError, IOError):
+        return
+
+    # Don't store empty summaries
+    if line_count < 5 and not files_modified and not files_created:
+        return
+
+    # Build summary
+    parts = [f"Session summary (session {session_id[:8]}):"]
+
+    if files_modified:
+        parts.append(f"Files modified: {', '.join(sorted(files_modified)[:10])}")
+    if files_created:
+        parts.append(f"Files created: {', '.join(sorted(files_created)[:10])}")
+    if commands_run:
+        parts.append(f"Commands run: {'; '.join(commands_run[:5])}")
+    if decisions:
+        parts.append(f"Decisions: {'; '.join(decisions[:3])}")
+    if errors:
+        parts.append(f"Errors hit: {'; '.join(errors[:3])}")
+
+    if tool_counts:
+        activity = ", ".join(f"{count} {tool}" for tool, count in tool_counts.most_common(5))
+        parts.append(f"Activity: {activity}")
+
+    if user_messages:
+        parts.append(f"User asked about: {'; '.join(user_messages[:3])}")
+
+    summary = "\n".join(parts)
+
+    store_memory(summary, "fact", 0.8, {
+        "type": "session_summary",
+        "session_id": session_id,
+        "line_count": line_count,
+        "source": "auto-capture",
+    })
+
+    # Clean up session dedup cache
+    cache_path = f"/tmp/engram-session-{session_id}.json"
+    try:
+        if os.path.exists(cache_path):
+            os.remove(cache_path)
+    except OSError:
+        pass
 
 
 def main():
