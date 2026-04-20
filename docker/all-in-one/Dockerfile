@@ -34,6 +34,7 @@ RUN pip install --no-cache-dir \
         pyyaml>=6.0 \
         click>=8.0.0 \
         requests>=2.28.0 \
+        networkx>=3.0 \
         mcp
 
 RUN find /usr/local/lib/python3.12/site-packages -type d \
@@ -53,7 +54,7 @@ FROM python:3.12-slim
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONPATH=/app/recall \
+    PYTHONPATH=/app:/app/recall \
     QDRANT_URL=http://localhost:6333 \
     FASTEMBED_URL=http://localhost:11435 \
     COLLECTION_NAME=agent-memory \
@@ -97,6 +98,7 @@ COPY mcp/server.py /app/mcp_server.py
 COPY docker/fastembed/fastembed_service.py /app/fastembed_service.py
 COPY docker/mcp/entrypoint.py /app/mcp_entrypoint.py
 COPY docker/mcp/dashboard.py /app/dashboard.py
+COPY vendor/graphify/graphify/ /app/graphify/
 COPY docker/all-in-one/init.sh /app/init.sh
 RUN chmod +x /app/init.sh
 

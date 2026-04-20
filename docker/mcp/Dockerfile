@@ -10,7 +10,7 @@ RUN apt-get update -qq && apt-get install -y --no-install-recommends \
 # Python deps
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt && \
-    pip install --no-cache-dir mcp fastapi uvicorn
+    pip install --no-cache-dir mcp fastapi uvicorn networkx>=3.0
 
 # Copy recall engine
 COPY src/recall/ /app/recall/
@@ -22,9 +22,10 @@ COPY mcp/server.py /app/server.py
 # For Docker, we expose it via a port using SSE transport instead
 COPY docker/mcp/entrypoint.py /app/entrypoint.py
 COPY docker/mcp/dashboard.py /app/dashboard.py
+COPY vendor/graphify/graphify/ /app/graphify/
 
 ENV PYTHONUNBUFFERED=1
-ENV PYTHONPATH=/app/recall
+ENV PYTHONPATH=/app:/app/recall
 
 EXPOSE 8585
 
