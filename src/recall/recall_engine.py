@@ -1273,6 +1273,127 @@ class EngramRecallEngine:
 
         return removed
 
+    # --- Direct Fetch & Timeline ---
+
+    async def get_by_ids(self, doc_ids: list) -> list:
+        """Fetch full memory details by ID(s)."""
+        if not doc_ids:
+            return []
+
+        try:
+            resp = await self._http.post(
+                f"{self.config.qdrant_url}/collections/{self.config.collection}/points",
+                json={"ids": doc_ids, "with_payload": True, "with_vector": False},
+            )
+            resp.raise_for_status()
+            points = resp.json().get("result", [])
+        except Exception:
+            return []
+
+        results = []
+        for p in points:
+            pid = str(p.get("id", ""))
+            pl = p.get("payload", {})
+            content = pl.get("content", pl.get("text", ""))
+            category = pl.get("category", "other")
+            created_at = pl.get("created_at", 0.0)
+            access_count = pl.get("access_count", 0)
+            private = pl.get("private", False)
+
+            mr = MemoryResult(
+                doc_id=pid,
+                content=content,
+                score=1.0,
+                tier="direct",
+                category=category,
+                metadata=pl,
+                created_at=created_at,
+                access_count=access_count,
+                private=private,
+            )
+
+            if self.graph:
+                try:
+                    related = self.graph.get_related_memory_ids(pid, max_hops=1)
+                    entities = []
+                    try:
+                        entity_data = self.graph.get_memories_for_entity(pid)
+                        if entity_data:
+                            entities = [e.get("name", "") for e in entity_data if e.get("name")]
+                    except Exception:
+                        pass
+                    mr.metadata["connections"] = {
+                        "related": related[:10],
+                        "entities": entities[:10],
+                    }
+                except Exception:
+                    pass
+
+            results.append(mr)
+
+        return results
+
+    async def timeline(self, hours: int = 24, category: str = None, limit: int = 20) -> list:
+        """Browse recent memories chronologically."""
+        import time as _time
+
+        cutoff = _time.time() - (hours * 3600) if hours > 0 else 0
+
+        must_conditions = []
+        if cutoff > 0:
+            must_conditions.append({
+                "key": "created_at",
+                "range": {"gte": cutoff},
+            })
+        if category:
+            must_conditions.append({
+                "key": "category",
+                "match": {"value": category},
+            })
+
+        scroll_filter = {"must": must_conditions} if must_conditions else None
+
+        payload = {
+            "limit": limit,
+            "with_payload": True,
+            "with_vector": False,
+            "order_by": [{"key": "created_at", "direction": "desc"}],
+        }
+        if scroll_filter:
+            payload["filter"] = scroll_filter
+
+        try:
+            resp = await self._http.post(
+                f"{self.config.qdrant_url}/collections/{self.config.collection}/points/scroll",
+                json=payload,
+            )
+            resp.raise_for_status()
+            points = resp.json().get("result", {}).get("points", [])
+        except Exception:
+            return []
+
+        results = []
+        for p in points:
+            pid = str(p.get("id", ""))
+            pl = p.get("payload", {})
+            content = pl.get("content", pl.get("text", ""))
+            category_val = pl.get("category", "other")
+            created_at = pl.get("created_at", 0.0)
+            private = pl.get("private", False)
+
+            mr = MemoryResult(
+                doc_id=pid,
+                content=content,
+                score=0.0,
+                tier="timeline",
+                category=category_val,
+                created_at=created_at,
+                private=private,
+            )
+            results.append(mr)
+
+        return results
+
     # --- Context Injection ---
 
     def get_hot_context(self, top_k: int = 5) -> str:

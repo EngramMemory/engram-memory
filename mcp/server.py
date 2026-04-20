@@ -150,8 +150,62 @@ class EngramMCPServer:
                                 "enum": ["preference", "fact", "decision", "entity", "other"],
                                 "description": "Filter by category",
                             },
+                            "detail": {
+                                "type": "string",
+                                "enum": ["compact", "full"],
+                                "default": "compact",
+                                "description": "Response detail level. compact returns 6 fields, full returns all 14.",
+                            },
                         },
                         "required": ["query"],
+                    },
+                ),
+                Tool(
+                    name="memory_get",
+                    title="Get Memory Details",
+                    description="Fetch full details for specific memory IDs. Use after memory_search to get complete content for relevant results.",
+                    annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False),
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "memory_id": {
+                                "type": "string",
+                                "description": "Single memory UUID to fetch",
+                            },
+                            "memory_ids": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "maxItems": 10,
+                                "description": "Batch fetch up to 10 memory UUIDs",
+                            },
+                        },
+                    },
+                ),
+                Tool(
+                    name="memory_timeline",
+                    title="Memory Timeline",
+                    description="Browse recent memories chronologically. Returns compact results sorted by creation time.",
+                    annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False),
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "hours": {
+                                "type": "integer",
+                                "default": 24,
+                                "description": "Look back N hours (default 24)",
+                            },
+                            "category": {
+                                "type": "string",
+                                "enum": ["preference", "fact", "decision", "entity", "other"],
+                                "description": "Filter by category",
+                            },
+                            "limit": {
+                                "type": "integer",
+                                "default": 20,
+                                "maximum": 50,
+                                "description": "Maximum results (default 20, max 50)",
+                            },
+                        },
                     },
                 ),
                 Tool(
@@ -267,6 +321,10 @@ class EngramMCPServer:
                 result = await self._handle_connect(**arguments)
             elif name == "memory_feedback":
                 result = await self._handle_feedback(**arguments)
+            elif name == "memory_get":
+                result = await self._handle_get(arguments)
+            elif name == "memory_timeline":
+                result = await self._handle_timeline(arguments)
             else:
                 raise ValueError(f"Unknown tool: {name}")
 
@@ -293,7 +351,7 @@ class EngramMCPServer:
             return {"success": False, "error": str(e)}
 
     async def _handle_search(
-        self, query: str, limit: int = 10, category: Optional[str] = None, **_
+        self, query: str, limit: int = 10, category: Optional[str] = None, detail: str = "compact", **_
     ) -> Dict[str, Any]:
         try:
             if self.engine:
@@ -302,7 +360,10 @@ class EngramMCPServer:
                     top_k=limit,
                     category=category,
                 )
-                memories = [r.to_dict() for r in results]
+                if detail == "full":
+                    memories = [r.to_dict() for r in results]
+                else:
+                    memories = [r.to_compact_dict() for r in results]
                 tiers_used = set(r.tier for r in results)
 
                 return {
@@ -398,6 +459,41 @@ class EngramMCPServer:
             rejected_ids=rejected_ids,
         )
         return result
+
+
+    async def _handle_get(self, arguments: dict) -> Dict[str, Any]:
+        """Handle memory_get tool calls."""
+        memory_id = arguments.get("memory_id")
+        memory_ids = arguments.get("memory_ids", [])
+
+        ids = []
+        if memory_id:
+            ids.append(memory_id)
+        if memory_ids:
+            ids.extend(memory_ids)
+
+        if not ids:
+            return {"success": False, "error": "Provide memory_id or memory_ids"}
+
+        ids = ids[:10]  # Cap at 10
+        results = await self.engine.get_by_ids(ids)
+        return {
+            "total_results": len(results),
+            "results": [r.to_dict() for r in results],
+        }
+
+    async def _handle_timeline(self, arguments: dict) -> Dict[str, Any]:
+        """Handle memory_timeline tool calls."""
+        hours = arguments.get("hours", 24)
+        category = arguments.get("category")
+        limit = min(arguments.get("limit", 20), 50)
+
+        results = await self.engine.timeline(hours=hours, category=category, limit=limit)
+        return {
+            "hours": hours,
+            "total_results": len(results),
+            "results": [r.to_compact_dict() for r in results],
+        }
 
 
 async def main():

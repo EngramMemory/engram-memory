@@ -215,6 +215,55 @@ server.tool(
   },
 );
 
+server.tool(
+  "memory_get",
+  "Fetch full details for specific memory IDs. Use after memory_search to get complete content.",
+  {
+    memory_id: z.string().optional().describe("Single memory UUID"),
+    memory_ids: z.array(z.string()).max(10).optional().describe("Batch fetch up to 10 UUIDs"),
+  },
+  { readOnlyHint: true, destructiveHint: false, title: "Get Memory Details" },
+  async ({ memory_id, memory_ids }) => {
+    const args: Record<string, unknown> = {};
+    if (memory_id) args.memory_id = memory_id;
+    if (memory_ids) args.memory_ids = memory_ids;
+    const result = await engramCall("/mcp", {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: { name: "memory_get", arguments: args },
+    });
+    return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+  },
+);
+
+server.tool(
+  "memory_timeline",
+  "Browse recent memories chronologically. Returns compact results sorted by creation time.",
+  {
+    hours: z.number().int().default(24).optional().describe("Look back N hours"),
+    category: z
+      .enum(["preference", "fact", "decision", "entity", "other"])
+      .optional()
+      .describe("Filter by category"),
+    limit: z.number().int().max(50).default(20).optional().describe("Max results"),
+  },
+  { readOnlyHint: true, destructiveHint: false, title: "Memory Timeline" },
+  async ({ hours, category, limit }) => {
+    const args: Record<string, unknown> = {};
+    if (hours !== undefined) args.hours = hours;
+    if (category) args.category = category;
+    if (limit !== undefined) args.limit = limit;
+    const result = await engramCall("/mcp", {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: { name: "memory_timeline", arguments: args },
+    });
+    return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+  },
+);
+
 // ── Start ───────────────────────────────────────────────────────────
 
 async function main() {
