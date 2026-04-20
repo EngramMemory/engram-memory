@@ -43,6 +43,7 @@ from mcp_server import EngramMCPServer
 from models import EngramConfig
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from mcp.server.sse import SseServerTransport
+from dashboard import register_dashboard_routes
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 logger = logging.getLogger("engram-mcp-docker")
@@ -120,6 +121,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Engram Memory MCP Server", version="2.1.0", lifespan=lifespan)
+register_dashboard_routes(app, mcp_server)
 
 
 # ── MCP transports ─────────────────────────────────────────────────────────

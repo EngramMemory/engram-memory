@@ -21,6 +21,7 @@ COPY mcp/server.py /app/server.py
 # The MCP server reads from stdin/writes to stdout (stdio transport)
 # For Docker, we expose it via a port using SSE transport instead
 COPY docker/mcp/entrypoint.py /app/entrypoint.py
+COPY docker/mcp/dashboard.py /app/dashboard.py
 
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH=/app/recall
