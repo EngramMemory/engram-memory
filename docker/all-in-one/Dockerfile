@@ -96,6 +96,7 @@ COPY src/recall/ /app/recall/
 COPY mcp/server.py /app/mcp_server.py
 COPY docker/fastembed/fastembed_service.py /app/fastembed_service.py
 COPY docker/mcp/entrypoint.py /app/mcp_entrypoint.py
+COPY docker/mcp/dashboard.py /app/dashboard.py
 COPY docker/all-in-one/init.sh /app/init.sh
 RUN chmod +x /app/init.sh
 
