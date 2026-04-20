@@ -105,29 +105,40 @@ def register_dashboard_routes(app: FastAPI, mcp_server):
             logger.error(f"Graph data error: {e}")
             return JSONResponse({"nodes": [], "edges": [], "stats": {}})
 
+        # Community mapping: preference=0, fact=1, decision=2, entity=3, other=4
+        _CAT_COMMUNITY = {"preference": 0, "fact": 1, "decision": 2, "entity": 3, "other": 4}
+
         # Build nodes (memories + entities)
         nodes = []
+        node_ids = set()
         memory_ids = set()
         for m in memories[:max_nodes]:
             mid = m.get("id", "")
             memory_ids.add(mid)
+            node_ids.add(mid)
             content = m.get("content", "")
+            cat = m.get("category", "other")
             nodes.append({
                 "id": mid,
                 "label": content[:60] + ("..." if len(content) > 60 else ""),
                 "type": "memory",
-                "category": m.get("category", "other"),
+                "category": cat,
+                "community": _CAT_COMMUNITY.get(cat, 4),
                 "created_at": m.get("created_at", 0),
+                "degree": 0,
             })
 
             for ent in m.get("entities", []):
                 ent_id = f"entity:{ent.get('name', '')}"
-                if not any(n["id"] == ent_id for n in nodes):
+                if ent_id not in node_ids:
+                    node_ids.add(ent_id)
                     nodes.append({
                         "id": ent_id,
                         "label": ent.get("name", ""),
                         "type": "entity",
                         "entity_type": ent.get("type", ""),
+                        "community": 3,
+                        "degree": 0,
                     })
 
         # Build edges
@@ -136,15 +147,17 @@ def register_dashboard_routes(app: FastAPI, mcp_server):
             src = mention.get("memory_id", "")
             tgt = f"entity:{mention.get('entity_name', '')}"
             if src in memory_ids:
-                edges.append({"from": src, "to": tgt, "type": "mentions"})
+                edges.append({"from": src, "to": tgt, "type": "mentions", "weight": 0.3})
 
         for cr in edges_data.get("co_retrieved", []):
             src = cr.get("memory_id_1", "")
             tgt = cr.get("memory_id_2", "")
             if src in memory_ids and tgt in memory_ids:
+                count = cr.get("count", 1)
                 edges.append({
                     "from": src, "to": tgt, "type": "co_retrieved",
-                    "count": cr.get("count", 1),
+                    "count": count,
+                    "weight": min(count / 10.0, 1.0),
                 })
 
         for rel in edges_data.get("related_to", []):
@@ -155,6 +168,14 @@ def register_dashboard_routes(app: FastAPI, mcp_server):
                     "from": src, "to": tgt, "type": "related_to",
                     "weight": rel.get("weight", 0.5),
                 })
+
+        # Compute degree for each node
+        degree_map = {}
+        for e in edges:
+            degree_map[e["from"]] = degree_map.get(e["from"], 0) + 1
+            degree_map[e["to"]] = degree_map.get(e["to"], 0) + 1
+        for n in nodes:
+            n["degree"] = degree_map.get(n["id"], 0)
 
         return JSONResponse({"nodes": nodes, "edges": edges, "stats": stats})
 
@@ -364,8 +385,14 @@ section.active { display: block; }
     </div>
     <div id="memory-list"><div id="loading">Loading memories...</div></div>
   </section>
-  <section id="tab-graph">
+  <section id="tab-graph" style="position:relative">
+    <div style="margin-bottom:12px">
+      <input type="text" id="graph-search" placeholder="Search graph nodes..."
+        style="width:100%;max-width:320px;background:var(--em-card);border:1px solid var(--em-border);border-radius:6px;padding:8px 12px;color:var(--em-text);font-family:var(--em-font-sans);font-size:13px;outline:none">
+      <div id="graph-search-results" style="margin-top:4px;font-size:12px;color:var(--em-muted)"></div>
+    </div>
     <div id="graph-container"></div>
+    <div id="graph-legend" style="position:absolute;bottom:24px;right:24px;background:var(--em-card);border:1px solid var(--em-border);border-radius:6px;padding:12px;font-size:11px"></div>
   </section>
   <section id="tab-stats">
     <div id="stats-grid"></div>
@@ -467,6 +494,8 @@ async function searchMemories(query) {
   } catch(e) { console.error(e); }
 }
 
+const COMMUNITY_COLORS = ["#22c55e","#4ade80","#16a34a","#86efb0","#15803c","#bbf7d4","#166534"];
+
 async function loadGraph() {
   graphLoaded = true;
   const container = document.getElementById("graph-container");
@@ -478,33 +507,101 @@ async function loadGraph() {
       container.innerHTML = '<div class="empty-state"><h2>No graph data</h2><p>Graph connections will appear as memories are linked.</p></div>';
       return;
     }
+    const maxDegree = Math.max(...d.nodes.map(n => n.degree || 1));
     const nodes = new vis.DataSet(d.nodes.map(n => ({
       id: n.id,
       label: n.label,
       shape: n.type==="entity" ? "diamond" : "dot",
-      size: n.type==="entity" ? 8 : 14,
+      size: n.type==="entity" ? 8 : (10 + 30 * ((n.degree || 1) / maxDegree)),
       color: {
-        background: n.type==="entity" ? "#0a0a0a" : "#141414",
-        border: n.type==="entity" ? "#4ade80" : (CAT_COLORS[n.category]||"#292929"),
-        highlight: {background: "#22c55e", border: "#22c55e"},
+        background: "#141414",
+        border: COMMUNITY_COLORS[(n.community || 0) % COMMUNITY_COLORS.length],
+        highlight: {background: COMMUNITY_COLORS[(n.community || 0) % COMMUNITY_COLORS.length], border: "#ffffff"},
+        hover: {background: "#1a1a1a", border: COMMUNITY_COLORS[(n.community || 0) % COMMUNITY_COLORS.length]},
       },
-      font: {color:"#ffffff", face:"Inter", size:11},
+      font: {color:"#ffffff", face:"Inter", size: (n.degree || 1) > maxDegree * 0.15 ? 12 : 0},
       borderWidth: 2,
+      title: n.label + " | " + (n.type||"memory") + " | degree: " + (n.degree||0),
     })));
     const edges = new vis.DataSet(d.edges.map((e,i) => ({
       id: i,
       from: e.from,
       to: e.to,
-      color: {color:"rgba(64,64,64,0.6)", highlight:"#22c55e"},
-      width: e.type==="co_retrieved" ? Math.min(e.count||1, 4) : (e.weight ? e.weight*3 : 1),
+      color: {color:"rgba(41,41,41,0.75)", highlight:"#22c55e", hover:"#4ade80", inherit:false, opacity:0.85},
+      width: e.weight ? Math.max(1, e.weight * 4) : (e.count ? Math.min(e.count, 4) : 1),
       dashes: e.type==="co_retrieved",
-      smooth: {type:"continuous"},
+      smooth: {type:"continuous", roundness:0.2},
+      title: e.type + (e.weight ? " | w=" + e.weight.toFixed(2) : "") + (e.count ? " | n=" + e.count : ""),
+      arrows: {to: {enabled: true, scaleFactor: 0.5}},
     })));
     container.innerHTML = "";
-    new vis.Network(container, {nodes, edges}, {
-      physics: {solver:"forceAtlas2Based", forceAtlas2Based:{gravitationalConstant:-30, centralGravity:0.005, springLength:120, damping:0.6, avoidOverlap:0.85}, stabilization:{iterations:200}},
-      interaction: {hover:true, tooltipDelay:200},
+    const network = new vis.Network(container, {nodes, edges}, {
+      physics: {
+        solver: "forceAtlas2Based",
+        forceAtlas2Based: {gravitationalConstant:-55, centralGravity:0.005, springLength:140, damping:0.6, avoidOverlap:0.85},
+        stabilization: {iterations:200, fit:true},
+        minVelocity: 0.5,
+      },
+      interaction: {hover:true, tooltipDelay:120, hideEdgesOnDrag:true},
+      nodes: {shape:"dot", borderWidth:2, borderWidthSelected:3, shadow:false},
+      edges: {smooth:{type:"continuous", roundness:0.2}, selectionWidth:2, hoverWidth:1.2, scaling:{min:1,max:4}},
+      configure: {enabled:false},
     });
+    network.once("stabilizationIterationsDone", () => {
+      network.setOptions({physics:{enabled:false}});
+    });
+    window._graphNetwork = network;
+
+    // Search handler
+    const searchInput = document.getElementById("graph-search");
+    const searchResults = document.getElementById("graph-search-results");
+    searchInput.addEventListener("input", function() {
+      const q = this.value.toLowerCase().trim();
+      if (q.length < 2) { searchResults.innerHTML = ""; return; }
+      const matches = d.nodes.filter(n => n.label.toLowerCase().includes(q));
+      searchResults.innerHTML = matches.slice(0,10).map(m =>
+        "<span style=\\"cursor:pointer;color:var(--em-accent);margin-right:12px\\" onclick=\\"window._graphNetwork.focus(\'"+m.id.replace(/'/g,"\\'")+"',{scale:1.5,animation:true})\\">" +
+        m.label.slice(0,40) + "</span>"
+      ).join("");
+    });
+
+    // Click info panel
+    network.on("click", function(params) {
+      if (params.nodes.length > 0) {
+        const nodeId = params.nodes[0];
+        const node = d.nodes.find(n => n.id === nodeId);
+        if (node) {
+          const neighbors = d.edges
+            .filter(e => e.from === nodeId || e.to === nodeId)
+            .map(e => e.from === nodeId ? e.to : e.from);
+          const neighborLabels = neighbors.map(nid => {
+            const nn = d.nodes.find(n => n.id === nid);
+            return nn ? nn.label.slice(0,30) : nid.slice(0,8);
+          });
+          searchResults.innerHTML =
+            "<div style=\\"padding:8px;background:var(--em-card);border:1px solid var(--em-border);border-radius:4px;margin-top:8px\\">" +
+            "<strong>" + node.label.slice(0,60) + "</strong><br>" +
+            "<span style=\\"color:var(--em-muted)\\">Type: " + node.type + " | Community: " + (node.community||0) + " | Degree: " + (node.degree||0) + "</span>" +
+            (neighborLabels.length ? "<br><span style=\\"color:var(--em-muted)\\">Connected: " + neighborLabels.join(", ") + "</span>" : "") +
+            "</div>";
+        }
+      }
+    });
+
+    // Community legend
+    const communities = new Set(d.nodes.map(n => n.community || 0));
+    const legendEl = document.getElementById("graph-legend");
+    if (communities.size > 1) {
+      const catNames = ["preference","fact","decision","entity","other"];
+      legendEl.innerHTML = "<div style=\\"color:var(--em-muted);margin-bottom:6px\\">Communities</div>" +
+        [...communities].sort().map(c => {
+          const color = COMMUNITY_COLORS[c % COMMUNITY_COLORS.length];
+          const name = catNames[c] || "group " + c;
+          return "<div style=\\"display:flex;align-items:center;gap:6px;margin:3px 0\\">" +
+            "<span style=\\"width:10px;height:10px;border-radius:50%;background:"+color+";display:inline-block\\"></span>" +
+            "<span style=\\"color:var(--em-text)\\">"+name+"</span></div>";
+        }).join("");
+    }
   } catch(e) {
     container.innerHTML = '<div class="empty-state"><h2>Error loading graph</h2><p>'+e.message+'</p></div>';
   }
