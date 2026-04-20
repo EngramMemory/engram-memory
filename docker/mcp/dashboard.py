@@ -4,6 +4,7 @@ Single-page dashboard served from the MCP server at /dashboard.
 Queries existing REST endpoints for data. No external dependencies.
 """
 
+import html as _html
 import json
 import logging
 import time
@@ -179,6 +180,37 @@ def register_dashboard_routes(app: FastAPI, mcp_server):
 
         return JSONResponse({"nodes": nodes, "edges": edges, "stats": stats})
 
+    @app.get("/dashboard/graph-html", response_class=HTMLResponse)
+    async def dashboard_graph_html(max_nodes: int = Query(500, le=2000)):
+        """Generate the full graphify-compatible vis.js HTML graph, identical to
+        what vendor/graphify/graphify/export.py to_html() produces.
+
+        Reuses:
+          - _html_styles() CSS verbatim (brand tokens, sidebar, search, legend)
+          - _html_script() JS verbatim (vis.js network, physics, search with
+            focus-and-zoom, click-to-inspect info panel, community legend with
+            show/hide, neighbor highlighting, degree-based sizing, edge weight)
+          - to_html() HTML skeleton verbatim (graph, header, sidebar layout)
+          - COMMUNITY_COLORS palette from export.py
+          - Node/edge data format expected by _html_script()
+        """
+        engine = mcp_server.engine
+        if not engine.graph:
+            return HTMLResponse(_graph_empty_html("No graph layer available"))
+
+        try:
+            memories = engine.graph.export_all_memories()
+            edges_data = engine.graph.export_all_edges()
+            stats = engine.graph.get_stats()
+        except Exception as e:
+            logger.error(f"Graph HTML error: {e}")
+            return HTMLResponse(_graph_empty_html(str(e)))
+
+        if not memories:
+            return HTMLResponse(_graph_empty_html("No memories in graph yet"))
+
+        return HTMLResponse(_build_graph_html(memories, edges_data, stats, max_nodes))
+
     @app.get("/dashboard/stats")
     async def dashboard_stats():
         global _stats_cache
@@ -266,6 +298,599 @@ def register_dashboard_routes(app: FastAPI, mcp_server):
         return JSONResponse(result)
 
 
+# ─── Graphify renderer helpers ────────────────────────────────────────────────
+# These reproduce the exact output of vendor/graphify/graphify/export.py
+# to_html() / _html_styles() / _html_script() without importing the vendored
+# package (which is not COPY'd into the container image).
+
+# Brand palette — matches COMMUNITY_COLORS in export.py exactly
+_COMMUNITY_COLORS = [
+    "#22c55e",  # brand-500 (accent)
+    "#4ade80",  # brand-400
+    "#16a34a",  # brand-600
+    "#86efb0",  # brand-300
+    "#15803c",  # brand-700
+    "#bbf7d4",  # brand-200
+    "#166534",  # brand-800
+]
+
+# Category → community id (matches dashboard graph-data logic)
+_CAT_COMMUNITY = {"preference": 0, "fact": 1, "decision": 2, "entity": 3, "other": 4}
+_CAT_NAMES = {0: "Preferences", 1: "Facts", 2: "Decisions", 3: "Entities", 4: "Other"}
+
+
+def _js_safe(obj) -> str:
+    """JSON-encode an object and escape </script> so embedded data can't break out."""
+    return json.dumps(obj).replace("</", "<\\/")
+
+
+def _graph_empty_html(msg: str) -> str:
+    return f"""<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">
+<style>body{{background:#000;color:#999;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}}</style>
+</head><body><p>{_html.escape(msg)}</p></body></html>"""
+
+
+def _build_graph_html(memories: list, edges_data: dict, stats: dict, max_nodes: int) -> str:
+    """Build the complete graphify vis.js HTML.
+
+    Replicates to_html() from vendor/graphify/graphify/export.py exactly:
+    - Same node format: id, label, color (bg/border/highlight/hover), size,
+      font, title, community, community_name, source_file, file_type, degree
+    - Same edge format: from, to, title, dashes, width, value, color, confidence
+    - Same community legend format: cid, color, label, count
+    - Same HTML skeleton: #graph canvas, #header, #sidebar with search,
+      #info-panel, #legend-wrap, #stats
+    - Exact CSS from _html_styles() (brand tokens, scrollbar styles)
+    - Exact JS from _html_script() (vis.js network config, physics, events)
+    """
+    # --- Build nodes ---
+    memories = memories[:max_nodes]
+    memory_ids = {m["id"] for m in memories}
+
+    # Collect entity nodes too (they appear via entity mentions)
+    entity_set: dict = {}  # entity_name -> {type, memories}
+    for m in memories:
+        for ent in m.get("entities", []):
+            ename = ent.get("name", "")
+            if ename:
+                if ename not in entity_set:
+                    entity_set[ename] = {"type": ent.get("type", ""), "degree": 0}
+
+    # Build edge list first (need degree counts)
+    raw_edges = []
+    entity_name_field = "entity"  # export_all_edges uses "entity" not "entity_name"
+
+    for mention in edges_data.get("mentions", []):
+        src = mention.get("memory_id", "")
+        ent_name = mention.get("entity", mention.get("entity_name", ""))
+        tgt = f"entity:{ent_name}"
+        if src in memory_ids and ent_name in entity_set:
+            raw_edges.append({
+                "from": src, "to": tgt,
+                "confidence": "EXTRACTED", "relation": "mentions",
+                "weight": 0.5,
+            })
+
+    for cr in edges_data.get("co_retrieved", []):
+        src = cr.get("from", cr.get("memory_id_1", ""))
+        tgt = cr.get("to", cr.get("memory_id_2", ""))
+        if src in memory_ids and tgt in memory_ids:
+            count = cr.get("count", 1)
+            raw_edges.append({
+                "from": src, "to": tgt,
+                "confidence": "EXTRACTED", "relation": "co_retrieved",
+                "weight": min(count / 10.0, 1.0),
+            })
+
+    for rel in edges_data.get("related_to", []):
+        src = rel.get("from", rel.get("memory_id_1", ""))
+        tgt = rel.get("to", rel.get("memory_id_2", ""))
+        if src in memory_ids and tgt in memory_ids:
+            raw_edges.append({
+                "from": src, "to": tgt,
+                "confidence": "EXTRACTED", "relation": "related_to",
+                "weight": rel.get("weight", 0.5),
+            })
+
+    # Degree map
+    degree_map: dict = {}
+    for e in raw_edges:
+        degree_map[e["from"]] = degree_map.get(e["from"], 0) + 1
+        degree_map[e["to"]] = degree_map.get(e["to"], 0) + 1
+
+    # --- Vis nodes for memories ---
+    all_node_ids = set()
+    vis_nodes = []
+    max_deg = max(degree_map.values(), default=1) or 1
+
+    for m in memories:
+        mid = m["id"]
+        all_node_ids.add(mid)
+        cat = m.get("category", "other")
+        cid = _CAT_COMMUNITY.get(cat, 4)
+        color = _COMMUNITY_COLORS[cid % len(_COMMUNITY_COLORS)]
+        content = m.get("content", "")
+        label = content[:60] + ("..." if len(content) > 60 else "")
+        deg = degree_map.get(mid, 1)
+        size = 10 + 30 * (deg / max_deg)
+        font_size = 12 if deg >= max_deg * 0.15 else 0
+        vis_nodes.append({
+            "id": mid,
+            "label": label,
+            "color": {
+                "background": "#141414",
+                "border": color,
+                "highlight": {"background": color, "border": "#4ade80"},
+                "hover": {"background": "#1a1a1a", "border": color},
+            },
+            "size": round(size, 1),
+            "font": {"size": font_size, "color": "#ffffff", "face": "'Inter', system-ui, sans-serif"},
+            "title": _html.escape(label),
+            "community": cid,
+            "community_name": _CAT_NAMES.get(cid, f"Community {cid}"),
+            "source_file": "",
+            "file_type": cat,
+            "degree": deg,
+        })
+
+    # --- Vis nodes for entities ---
+    for ename, edata in entity_set.items():
+        nid = f"entity:{ename}"
+        all_node_ids.add(nid)
+        cid = 3  # entities always community 3
+        color = _COMMUNITY_COLORS[cid % len(_COMMUNITY_COLORS)]
+        deg = degree_map.get(nid, 1)
+        size = 8 + 20 * (deg / max_deg)
+        font_size = 11 if deg >= max_deg * 0.15 else 0
+        vis_nodes.append({
+            "id": nid,
+            "label": ename,
+            "color": {
+                "background": "#141414",
+                "border": color,
+                "highlight": {"background": color, "border": "#4ade80"},
+                "hover": {"background": "#1a1a1a", "border": color},
+            },
+            "size": round(size, 1),
+            "font": {"size": font_size, "color": "#ffffff", "face": "'Inter', system-ui, sans-serif"},
+            "title": _html.escape(ename),
+            "community": cid,
+            "community_name": "Entities",
+            "source_file": "",
+            "file_type": edata["type"],
+            "degree": deg,
+        })
+
+    # --- Vis edges ---
+    vis_edges = []
+    for e in raw_edges:
+        confidence = e.get("confidence", "EXTRACTED")
+        relation = e.get("relation", "")
+        weight = e.get("weight", 1.0)
+        vis_edges.append({
+            "from": e["from"],
+            "to": e["to"],
+            "label": relation,
+            "title": _html.escape(f"{relation} [{confidence}]"),
+            "dashes": confidence != "EXTRACTED",
+            "width": 2 if confidence == "EXTRACTED" else 1,
+            "value": float(weight),
+            "color": {
+                "color": "rgba(64, 64, 64, 0.6)" if confidence == "EXTRACTED" else "rgba(64, 64, 64, 0.35)",
+                "highlight": "#22c55e",
+                "hover": "#4ade80",
+                "inherit": False,
+                "opacity": 0.75 if confidence == "EXTRACTED" else 0.4,
+            },
+            "confidence": confidence,
+        })
+
+    # --- Community legend ---
+    community_counts: dict = {}
+    for n in vis_nodes:
+        cid = n["community"]
+        community_counts[cid] = community_counts.get(cid, 0) + 1
+
+    legend_data = []
+    for cid in sorted(community_counts.keys()):
+        color = _COMMUNITY_COLORS[cid % len(_COMMUNITY_COLORS)]
+        lbl = _html.escape(_CAT_NAMES.get(cid, f"Community {cid}"))
+        legend_data.append({"cid": cid, "color": color, "label": lbl, "count": community_counts[cid]})
+
+    nodes_json = _js_safe(vis_nodes)
+    edges_json = _js_safe(vis_edges)
+    legend_json = _js_safe(legend_data)
+
+    n_nodes = len(vis_nodes)
+    n_edges = len(vis_edges)
+    n_communities = len(community_counts)
+    subtitle = f"{n_nodes} nodes / {n_edges} edges / {n_communities} communities"
+    stats_str = f"{n_nodes} nodes &middot; {n_edges} edges &middot; {n_communities} communities"
+
+    # HTML skeleton matches to_html() from export.py exactly
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=5">
+<meta name="theme-color" content="#0a0a0a">
+<title>Engram Memory Graph</title>
+<script src="https://unpkg.com/vis-network@9.1.9/standalone/umd/vis-network.min.js"></script>
+{_graphify_styles()}
+</head>
+<body>
+<div id="graph"></div>
+<div id="header">
+  <div class="title">Engram<span class="mark">.</span> Memory Graph</div>
+  <div class="subtitle">{subtitle}</div>
+</div>
+<div id="sidebar">
+  <div id="search-wrap">
+    <input id="search" type="text" placeholder="Search nodes..." autocomplete="off">
+    <div id="search-results"></div>
+  </div>
+  <div id="info-panel">
+    <h3>Node Info</h3>
+    <div id="info-content"><span class="empty">Click a node to inspect it</span></div>
+  </div>
+  <div id="legend-wrap">
+    <h3>Communities</h3>
+    <div id="legend"></div>
+  </div>
+  <div id="stats">{stats_str}</div>
+</div>
+{_graphify_script(nodes_json, edges_json, legend_json)}
+</body>
+</html>"""
+
+
+def _graphify_styles() -> str:
+    """Exact copy of _html_styles() from vendor/graphify/graphify/export.py."""
+    return """<style>
+  :root {
+    --em-bg: #000000;
+    --em-surface: #0a0a0a;
+    --em-card: #141414;
+    --em-text: #ffffff;
+    --em-text-dim: #d4d4d4;
+    --em-muted: #999999;
+    --em-muted-soft: #666666;
+    --em-border: #292929;
+    --em-border-soft: #1f1f1f;
+    --em-accent: #22c55e;
+    --em-accent-soft: #4ade80;
+    --em-accent-deep: #15803c;
+    --em-font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    --em-font-display: 'Space Grotesk', 'Inter', system-ui, sans-serif;
+    --em-font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    background: var(--em-bg);
+    color: var(--em-text);
+    font-family: var(--em-font-sans);
+    font-feature-settings: 'cv01','cv03','cv04','cv11';
+    -webkit-font-smoothing: antialiased;
+    display: flex;
+    overflow: hidden;
+  }
+  #graph { flex: 1; width: 100%; height: 100vh; background: var(--em-bg); }
+  #header {
+    position: fixed; top: 0; left: 0; z-index: 10;
+    padding: 18px 24px; pointer-events: none;
+  }
+  #header .title {
+    font-family: var(--em-font-display);
+    font-size: 18px; font-weight: 600; letter-spacing: -0.02em;
+    color: var(--em-text);
+  }
+  #header .title .mark { color: var(--em-accent); }
+  #header .subtitle {
+    font-family: var(--em-font-mono);
+    font-size: 11px; letter-spacing: 0.02em;
+    color: var(--em-muted); margin-top: 2px;
+    font-variant-numeric: tabular-nums;
+  }
+  #sidebar {
+    width: 300px;
+    background: var(--em-surface);
+    border-left: 1px solid var(--em-border);
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  #search-wrap { padding: 14px; border-bottom: 1px solid var(--em-border); }
+  #search {
+    width: 100%;
+    background: var(--em-card);
+    border: 1px solid var(--em-border);
+    color: var(--em-text);
+    padding: 8px 12px;
+    border-radius: 8px;
+    font-size: 13px;
+    font-family: var(--em-font-sans);
+    outline: none;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  }
+  #search::placeholder { color: var(--em-muted-soft); }
+  #search:focus {
+    border-color: var(--em-accent);
+    box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.18);
+  }
+  #search-results {
+    max-height: 160px; overflow-y: auto;
+    padding: 6px 14px 10px;
+    border-bottom: 1px solid var(--em-border);
+    display: none;
+  }
+  .search-item {
+    padding: 5px 8px;
+    cursor: pointer;
+    border-radius: 6px;
+    font-size: 12px;
+    color: var(--em-text-dim);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .search-item:hover { background: var(--em-card); color: var(--em-text); }
+  #info-panel { padding: 16px; border-bottom: 1px solid var(--em-border); min-height: 150px; }
+  #info-panel h3 {
+    font-family: var(--em-font-mono);
+    font-size: 10px;
+    color: var(--em-muted);
+    margin-bottom: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+  }
+  #info-content { font-size: 13px; color: var(--em-text-dim); line-height: 1.65; }
+  #info-content .field { margin-bottom: 5px; }
+  #info-content .field b { color: var(--em-text); font-weight: 600; }
+  #info-content .empty { color: var(--em-muted-soft); font-style: normal; }
+  .neighbor-link {
+    display: block;
+    padding: 4px 8px;
+    margin: 2px 0;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 12px;
+    color: var(--em-text-dim);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    border-left: 3px solid var(--em-border);
+    transition: background 0.15s ease, color 0.15s ease;
+  }
+  .neighbor-link:hover { background: var(--em-card); color: var(--em-text); }
+  #neighbors-list { max-height: 180px; overflow-y: auto; margin-top: 6px; }
+  #legend-wrap { flex: 1; overflow-y: auto; padding: 14px; }
+  #legend-wrap h3 {
+    font-family: var(--em-font-mono);
+    font-size: 10px;
+    color: var(--em-muted);
+    margin-bottom: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+  }
+  .legend-item {
+    display: flex; align-items: center; gap: 10px;
+    padding: 5px 6px;
+    cursor: pointer;
+    border-radius: 6px;
+    font-size: 12px;
+    color: var(--em-text-dim);
+    transition: background 0.15s ease, color 0.15s ease;
+  }
+  .legend-item:hover { background: var(--em-card); color: var(--em-text); }
+  .legend-item.dimmed { opacity: 0.35; }
+  .legend-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+  .legend-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .legend-count {
+    color: var(--em-muted-soft);
+    font-family: var(--em-font-mono);
+    font-size: 10px;
+    font-variant-numeric: tabular-nums;
+  }
+  #stats {
+    padding: 12px 16px;
+    border-top: 1px solid var(--em-border);
+    font-family: var(--em-font-mono);
+    font-size: 10px;
+    color: var(--em-muted-soft);
+    letter-spacing: 0.02em;
+    font-variant-numeric: tabular-nums;
+  }
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: #52525b; }
+</style>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">"""
+
+
+def _graphify_script(nodes_json: str, edges_json: str, legend_json: str) -> str:
+    """Exact copy of _html_script() from vendor/graphify/graphify/export.py."""
+    return f"""<script>
+const RAW_NODES = {nodes_json};
+const RAW_EDGES = {edges_json};
+const LEGEND = {legend_json};
+
+// HTML-escape helper — prevents XSS when injecting graph data into innerHTML
+function esc(s) {{
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}}
+
+// Build vis datasets
+const nodesDS = new vis.DataSet(RAW_NODES.map(n => ({{
+  id: n.id, label: n.label, color: n.color, size: n.size,
+  font: n.font, title: n.title,
+  _community: n.community, _community_name: n.community_name,
+  _source_file: n.source_file, _file_type: n.file_type, _degree: n.degree,
+}})));
+
+const edgesDS = new vis.DataSet(RAW_EDGES.map((e, i) => ({{
+  id: i, from: e.from, to: e.to,
+  label: '',
+  title: e.title,
+  dashes: e.dashes,
+  width: e.width,
+  color: e.color,
+  arrows: {{ to: {{ enabled: true, scaleFactor: 0.5 }} }},
+}})));
+
+const container = document.getElementById('graph');
+const network = new vis.Network(container, {{ nodes: nodesDS, edges: edgesDS }}, {{
+  physics: {{
+    enabled: true,
+    solver: 'forceAtlas2Based',
+    forceAtlas2Based: {{
+      gravitationalConstant: -55,
+      centralGravity: 0.008,
+      springLength: 140,
+      springConstant: 0.06,
+      damping: 0.6,
+      avoidOverlap: 0.85,
+    }},
+    stabilization: {{ iterations: 200, fit: true }},
+    minVelocity: 0.5,
+  }},
+  interaction: {{
+    hover: true,
+    tooltipDelay: 120,
+    hideEdgesOnDrag: true,
+    navigationButtons: false,
+    keyboard: false,
+  }},
+  configure: {{ enabled: false }},
+  nodes: {{
+    shape: 'dot',
+    borderWidth: 2,
+    borderWidthSelected: 3,
+    font: {{
+      face: "'Inter', system-ui, sans-serif",
+      color: '#ffffff',
+      size: 12,
+      strokeWidth: 0,
+    }},
+    shadow: false,
+  }},
+  edges: {{
+    smooth: {{ type: 'continuous', roundness: 0.2 }},
+    selectionWidth: 2,
+    color: {{ color: 'rgba(41, 41, 41, 0.75)', highlight: '#22c55e', hover: '#4ade80', inherit: false, opacity: 0.85 }},
+    scaling: {{ min: 1, max: 4 }},
+    hoverWidth: 1.2,
+  }},
+}});
+
+network.once('stabilizationIterationsDone', () => {{
+  network.setOptions({{ physics: {{ enabled: false }} }});
+}});
+
+function showInfo(nodeId) {{
+  const n = nodesDS.get(nodeId);
+  if (!n) return;
+  const neighborIds = network.getConnectedNodes(nodeId);
+  const neighborItems = neighborIds.map(nid => {{
+    const nb = nodesDS.get(nid);
+    const color = nb && nb.color && nb.color.border ? nb.color.border : '#22c55e';
+    return `<span class="neighbor-link" style="border-left-color:${{esc(color)}}" onclick="focusNode(${{JSON.stringify(nid)}})">${{esc(nb ? nb.label : nid)}}</span>`;
+  }}).join('');
+  document.getElementById('info-content').innerHTML = `
+    <div class="field"><b>${{esc(n.label)}}</b></div>
+    <div class="field">Type: ${{esc(n._file_type || 'unknown')}}</div>
+    <div class="field">Community: ${{esc(n._community_name)}}</div>
+    <div class="field">Source: ${{esc(n._source_file || '-')}}</div>
+    <div class="field">Degree: ${{n._degree}}</div>
+    ${{neighborIds.length ? `<div class="field" style="margin-top:8px;color:#aaa;font-size:11px">Neighbors (${{neighborIds.length}})</div><div id="neighbors-list">${{neighborItems}}</div>` : ''}}
+  `;
+}}
+
+function focusNode(nodeId) {{
+  network.focus(nodeId, {{ scale: 1.4, animation: true }});
+  network.selectNodes([nodeId]);
+  showInfo(nodeId);
+}}
+
+// Track hovered node — hover detection is more reliable than click params
+let hoveredNodeId = null;
+network.on('hoverNode', params => {{
+  hoveredNodeId = params.node;
+  container.style.cursor = 'pointer';
+}});
+network.on('blurNode', () => {{
+  hoveredNodeId = null;
+  container.style.cursor = 'default';
+}});
+container.addEventListener('click', () => {{
+  if (hoveredNodeId !== null) {{
+    showInfo(hoveredNodeId);
+    network.selectNodes([hoveredNodeId]);
+  }}
+}});
+network.on('click', params => {{
+  if (params.nodes.length > 0) {{
+    showInfo(params.nodes[0]);
+  }} else if (hoveredNodeId === null) {{
+    document.getElementById('info-content').innerHTML = '<span class="empty">Click a node to inspect it</span>';
+  }}
+}});
+
+const searchInput = document.getElementById('search');
+const searchResults = document.getElementById('search-results');
+searchInput.addEventListener('input', () => {{
+  const q = searchInput.value.toLowerCase().trim();
+  searchResults.innerHTML = '';
+  if (!q) {{ searchResults.style.display = 'none'; return; }}
+  const matches = RAW_NODES.filter(n => n.label.toLowerCase().includes(q)).slice(0, 20);
+  if (!matches.length) {{ searchResults.style.display = 'none'; return; }}
+  searchResults.style.display = 'block';
+  matches.forEach(n => {{
+    const el = document.createElement('div');
+    el.className = 'search-item';
+    el.textContent = n.label;
+    el.style.borderLeft = `3px solid ${{n.color && n.color.border ? n.color.border : '#22c55e'}}`;
+    el.style.paddingLeft = '8px';
+    el.onclick = () => {{
+      network.focus(n.id, {{ scale: 1.5, animation: true }});
+      network.selectNodes([n.id]);
+      showInfo(n.id);
+      searchResults.style.display = 'none';
+      searchInput.value = '';
+    }};
+    searchResults.appendChild(el);
+  }});
+}});
+document.addEventListener('click', e => {{
+  if (!searchResults.contains(e.target) && e.target !== searchInput)
+    searchResults.style.display = 'none';
+}});
+
+const hiddenCommunities = new Set();
+const legendEl = document.getElementById('legend');
+LEGEND.forEach(c => {{
+  const item = document.createElement('div');
+  item.className = 'legend-item';
+  item.innerHTML = `<div class="legend-dot" style="background:${{c.color}}"></div>
+    <span class="legend-label">${{c.label}}</span>
+    <span class="legend-count">${{c.count}}</span>`;
+  item.onclick = () => {{
+    if (hiddenCommunities.has(c.cid)) {{
+      hiddenCommunities.delete(c.cid);
+      item.classList.remove('dimmed');
+    }} else {{
+      hiddenCommunities.add(c.cid);
+      item.classList.add('dimmed');
+    }}
+    const updates = RAW_NODES
+      .filter(n => n.community === c.cid)
+      .map(n => ({{ id: n.id, hidden: hiddenCommunities.has(c.cid) }}));
+    nodesDS.update(updates);
+  }};
+  legendEl.appendChild(item);
+}});
+</script>"""
+
+
+# ─── Dashboard HTML ───────────────────────────────────────────────────────────
+
 def get_dashboard_html():
     """Return the complete dashboard SPA as an HTML string."""
     return '''<!DOCTYPE html>
@@ -277,7 +902,6 @@ def get_dashboard_html():
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@600&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
-<script src="https://unpkg.com/vis-network@9.1.9/standalone/umd/vis-network.min.js"></script>
 <style>
 :root {
   --em-bg: #000000;
@@ -337,7 +961,6 @@ section.active { display: block; }
 .card-meta-row { display: flex; gap: 16px; flex-wrap: wrap; }
 .card-meta-row span { font-family: var(--em-font-mono); }
 
-#graph-container { width: 100%; height: calc(100vh - 160px); border-radius: 6px; border: 1px solid var(--em-border); }
 
 #stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
 .stat-card { background: var(--em-card); border: 1px solid var(--em-border); border-radius: 6px; padding: 20px; }
@@ -385,14 +1008,8 @@ section.active { display: block; }
     </div>
     <div id="memory-list"><div id="loading">Loading memories...</div></div>
   </section>
-  <section id="tab-graph" style="position:relative">
-    <div style="margin-bottom:12px">
-      <input type="text" id="graph-search" placeholder="Search graph nodes..."
-        style="width:100%;max-width:320px;background:var(--em-card);border:1px solid var(--em-border);border-radius:6px;padding:8px 12px;color:var(--em-text);font-family:var(--em-font-sans);font-size:13px;outline:none">
-      <div id="graph-search-results" style="margin-top:4px;font-size:12px;color:var(--em-muted)"></div>
-    </div>
-    <div id="graph-container"></div>
-    <div id="graph-legend" style="position:absolute;bottom:24px;right:24px;background:var(--em-card);border:1px solid var(--em-border);border-radius:6px;padding:12px;font-size:11px"></div>
+  <section id="tab-graph" style="padding:0;overflow:hidden">
+    <iframe id="graph-frame" src="/dashboard/graph-html" style="width:100%;height:calc(100vh - 110px);border:none;border-radius:0;display:block"></iframe>
   </section>
   <section id="tab-stats">
     <div id="stats-grid"></div>
@@ -402,7 +1019,6 @@ section.active { display: block; }
 const CAT_COLORS = {preference:"#22c55e",fact:"#3b82f6",decision:"#f59e0b",entity:"#8b5cf6",other:"#6b7280"};
 let currentCat = "";
 let searchTimeout = null;
-let graphLoaded = false;
 
 // Tab switching
 document.querySelectorAll("#tabs button").forEach(btn => {
@@ -411,7 +1027,6 @@ document.querySelectorAll("#tabs button").forEach(btn => {
     document.querySelectorAll("main section").forEach(s => s.classList.remove("active"));
     btn.classList.add("active");
     document.getElementById("tab-" + btn.dataset.tab).classList.add("active");
-    if (btn.dataset.tab === "graph" && !graphLoaded) loadGraph();
     if (btn.dataset.tab === "stats") loadStats();
   });
 });
@@ -492,119 +1107,6 @@ async function searchMemories(query) {
     const d = await r.json();
     renderCards((d.results||[]).map(m => ({...m, id: m.doc_id})));
   } catch(e) { console.error(e); }
-}
-
-const COMMUNITY_COLORS = ["#22c55e","#4ade80","#16a34a","#86efb0","#15803c","#bbf7d4","#166534"];
-
-async function loadGraph() {
-  graphLoaded = true;
-  const container = document.getElementById("graph-container");
-  container.innerHTML = '<div id="loading">Loading graph...</div>';
-  try {
-    const r = await fetch("/dashboard/graph-data");
-    const d = await r.json();
-    if (!d.nodes || !d.nodes.length) {
-      container.innerHTML = '<div class="empty-state"><h2>No graph data</h2><p>Graph connections will appear as memories are linked.</p></div>';
-      return;
-    }
-    const maxDegree = Math.max(...d.nodes.map(n => n.degree || 1));
-    const nodes = new vis.DataSet(d.nodes.map(n => ({
-      id: n.id,
-      label: n.label,
-      shape: n.type==="entity" ? "diamond" : "dot",
-      size: n.type==="entity" ? 8 : (10 + 30 * ((n.degree || 1) / maxDegree)),
-      color: {
-        background: "#141414",
-        border: COMMUNITY_COLORS[(n.community || 0) % COMMUNITY_COLORS.length],
-        highlight: {background: COMMUNITY_COLORS[(n.community || 0) % COMMUNITY_COLORS.length], border: "#ffffff"},
-        hover: {background: "#1a1a1a", border: COMMUNITY_COLORS[(n.community || 0) % COMMUNITY_COLORS.length]},
-      },
-      font: {color:"#ffffff", face:"Inter", size: (n.degree || 1) > maxDegree * 0.15 ? 12 : 0},
-      borderWidth: 2,
-      title: n.label + " | " + (n.type||"memory") + " | degree: " + (n.degree||0),
-    })));
-    const edges = new vis.DataSet(d.edges.map((e,i) => ({
-      id: i,
-      from: e.from,
-      to: e.to,
-      color: {color:"rgba(41,41,41,0.75)", highlight:"#22c55e", hover:"#4ade80", inherit:false, opacity:0.85},
-      width: e.weight ? Math.max(1, e.weight * 4) : (e.count ? Math.min(e.count, 4) : 1),
-      dashes: e.type==="co_retrieved",
-      smooth: {type:"continuous", roundness:0.2},
-      title: e.type + (e.weight ? " | w=" + e.weight.toFixed(2) : "") + (e.count ? " | n=" + e.count : ""),
-      arrows: {to: {enabled: true, scaleFactor: 0.5}},
-    })));
-    container.innerHTML = "";
-    const network = new vis.Network(container, {nodes, edges}, {
-      physics: {
-        solver: "forceAtlas2Based",
-        forceAtlas2Based: {gravitationalConstant:-55, centralGravity:0.005, springLength:140, damping:0.6, avoidOverlap:0.85},
-        stabilization: {iterations:200, fit:true},
-        minVelocity: 0.5,
-      },
-      interaction: {hover:true, tooltipDelay:120, hideEdgesOnDrag:true},
-      nodes: {shape:"dot", borderWidth:2, borderWidthSelected:3, shadow:false},
-      edges: {smooth:{type:"continuous", roundness:0.2}, selectionWidth:2, hoverWidth:1.2, scaling:{min:1,max:4}},
-      configure: {enabled:false},
-    });
-    network.once("stabilizationIterationsDone", () => {
-      network.setOptions({physics:{enabled:false}});
-    });
-    window._graphNetwork = network;
-
-    // Search handler
-    const searchInput = document.getElementById("graph-search");
-    const searchResults = document.getElementById("graph-search-results");
-    searchInput.addEventListener("input", function() {
-      const q = this.value.toLowerCase().trim();
-      if (q.length < 2) { searchResults.innerHTML = ""; return; }
-      const matches = d.nodes.filter(n => n.label.toLowerCase().includes(q));
-      searchResults.innerHTML = matches.slice(0,10).map(m =>
-        "<span style=\\"cursor:pointer;color:var(--em-accent);margin-right:12px\\" onclick=\\"window._graphNetwork.focus(\'"+m.id.replace(/'/g,"\\'")+"',{scale:1.5,animation:true})\\">" +
-        m.label.slice(0,40) + "</span>"
-      ).join("");
-    });
-
-    // Click info panel
-    network.on("click", function(params) {
-      if (params.nodes.length > 0) {
-        const nodeId = params.nodes[0];
-        const node = d.nodes.find(n => n.id === nodeId);
-        if (node) {
-          const neighbors = d.edges
-            .filter(e => e.from === nodeId || e.to === nodeId)
-            .map(e => e.from === nodeId ? e.to : e.from);
-          const neighborLabels = neighbors.map(nid => {
-            const nn = d.nodes.find(n => n.id === nid);
-            return nn ? nn.label.slice(0,30) : nid.slice(0,8);
-          });
-          searchResults.innerHTML =
-            "<div style=\\"padding:8px;background:var(--em-card);border:1px solid var(--em-border);border-radius:4px;margin-top:8px\\">" +
-            "<strong>" + node.label.slice(0,60) + "</strong><br>" +
-            "<span style=\\"color:var(--em-muted)\\">Type: " + node.type + " | Community: " + (node.community||0) + " | Degree: " + (node.degree||0) + "</span>" +
-            (neighborLabels.length ? "<br><span style=\\"color:var(--em-muted)\\">Connected: " + neighborLabels.join(", ") + "</span>" : "") +
-            "</div>";
-        }
-      }
-    });
-
-    // Community legend
-    const communities = new Set(d.nodes.map(n => n.community || 0));
-    const legendEl = document.getElementById("graph-legend");
-    if (communities.size > 1) {
-      const catNames = ["preference","fact","decision","entity","other"];
-      legendEl.innerHTML = "<div style=\\"color:var(--em-muted);margin-bottom:6px\\">Communities</div>" +
-        [...communities].sort().map(c => {
-          const color = COMMUNITY_COLORS[c % COMMUNITY_COLORS.length];
-          const name = catNames[c] || "group " + c;
-          return "<div style=\\"display:flex;align-items:center;gap:6px;margin:3px 0\\">" +
-            "<span style=\\"width:10px;height:10px;border-radius:50%;background:"+color+";display:inline-block\\"></span>" +
-            "<span style=\\"color:var(--em-text)\\">"+name+"</span></div>";
-        }).join("");
-    }
-  } catch(e) {
-    container.innerHTML = '<div class="empty-state"><h2>Error loading graph</h2><p>'+e.message+'</p></div>';
-  }
 }
 
 async function loadStats() {
