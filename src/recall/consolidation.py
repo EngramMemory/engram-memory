@@ -37,6 +37,10 @@ class EngramConsolidator:
 
         # Scroll all points from Qdrant
         all_points = await self._scroll_all_points()
+
+        # Exclude private memories from consolidation
+        all_points = [p for p in all_points if not p.get("payload", {}).get("private", False)]
+
         if len(all_points) < 2:
             return {"clusters_found": 0, "memories_merged": 0, "memories_removed": 0}
 
@@ -201,11 +205,12 @@ class EngramConsolidator:
         except Exception as e:
             return {"error": f"Search failed: {e}", "connections_created": 0}
 
-        # Filter to different categories
+        # Filter to different categories, excluding private memories
         cross_category = [
             r for r in results
             if str(r.get("id", "")) != doc_id
             and r.get("payload", {}).get("category", "other") != source_category
+            and not r.get("payload", {}).get("private", False)
         ]
 
         # Create RELATED_TO edges

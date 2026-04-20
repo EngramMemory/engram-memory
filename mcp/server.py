@@ -126,6 +126,11 @@ class EngramMCPServer:
                                 "maximum": 1.0,
                                 "description": "Importance score (0-1)",
                             },
+                            "private": {
+                                "type": "boolean",
+                                "default": False,
+                                "description": "Mark memory as private. Private memories are excluded from exports, consolidation, and graph connections.",
+                            },
                         },
                         "required": ["text"],
                     },
@@ -270,14 +275,14 @@ class EngramMCPServer:
     # ── Tool Handlers ───────────────────────────────────────────────
 
     async def _handle_store(
-        self, text: str, category: str = "other", importance: float = 0.5, **_
+        self, text: str, category: str = "other", importance: float = 0.5, private: bool = False, **_
     ) -> Dict[str, Any]:
         try:
             if self.engine:
                 doc_id, resolved_category = await self.engine.store(
                     content=text,
                     category=category,
-                    metadata={"importance": importance},
+                    metadata={"importance": importance, "private": private},
                 )
                 logger.info(f"Stored memory {doc_id} via recall engine")
                 return {"success": True, "memory_id": doc_id, "category": resolved_category}

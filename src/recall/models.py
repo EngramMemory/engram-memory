@@ -54,9 +54,10 @@ class MemoryResult:
     match_context: str = ""     # Why this result matched (helps calling model rerank)
     preference_boost: float = 0.0  # Boost from reranking feedback (0 = no feedback yet)
     doc_vector: Any = None    # Transient: actual document vector for hot-tier promotion
+    private: bool = False
 
     def to_dict(self) -> dict:
-        return {
+        d = {
             "doc_id": self.doc_id,
             "content": self.content,
             "score": round(self.score, 4),
@@ -72,6 +73,23 @@ class MemoryResult:
             "match_context": self.match_context,
             "preference_boost": round(self.preference_boost, 4),
         }
+        if self.private:
+            d["private"] = True
+        return d
+
+    def to_compact_dict(self) -> dict:
+        preview = self.content[:100] + ("..." if len(self.content) > 100 else "")
+        d = {
+            "doc_id": self.doc_id,
+            "content_preview": preview,
+            "score": round(self.score, 4),
+            "confidence": self.confidence,
+            "category": self.category,
+            "created_at": self.created_at,
+        }
+        if self.private:
+            d["private"] = True
+        return d
 
 
 @dataclass

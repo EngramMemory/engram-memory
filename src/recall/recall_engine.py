@@ -77,6 +77,26 @@ _CATEGORY_PATTERNS = {
     "entity": re.compile(r"\b(company|team|person|project|service|app|platform|organization|department|manager|lead|owner|maintainer|vendor|client|VP|CTO|CEO|engineer)\b", re.IGNORECASE),
 }
 
+# ─── Privacy ─────────────────────────────────────────────────────────
+PRIVATE_TAG_RE = re.compile(r"<private>(.*?)</private>", re.DOTALL)
+SENSITIVE_RE = re.compile(
+    r"(?:key|secret|token|password|passwd|api[_\-]?key|credentials?)\s*[:=]\s*\S{20,}",
+    re.IGNORECASE,
+)
+
+
+def _strip_private_tags(content: str) -> tuple:
+    """Strip <private> tags from content. Returns (cleaned_content, had_tags)."""
+    if "<private>" not in content:
+        return content, False
+    cleaned = PRIVATE_TAG_RE.sub(r"\1", content)
+    return cleaned, True
+
+
+def _detect_sensitive(content: str) -> bool:
+    """Auto-detect likely secrets in content."""
+    return bool(SENSITIVE_RE.search(content))
+
 
 def text_to_sparse_vector(text: str, boost_specifics: bool = False) -> Dict:
     """Convert text to a sparse vector for Qdrant hybrid search.
@@ -537,6 +557,15 @@ class EngramRecallEngine:
         if doc_id is None:
             doc_id = str(uuid.uuid4())
 
+        # Privacy: strip <private> tags and auto-detect secrets
+        if metadata is None:
+            metadata = {}
+        content, had_private_tags = _strip_private_tags(content)
+        is_private = metadata.get("private", False) or had_private_tags
+        if not is_private and _detect_sensitive(content):
+            is_private = True
+        metadata["private"] = is_private
+
         # Embed (document prefix for storage) — always local, always fast
         vector = await self._embed(content, type="document")
 
@@ -596,8 +625,8 @@ class EngramRecallEngine:
         # Index in Multi-Head Hasher (Tier 2)
         self.hasher.index(vector, doc_id)
 
-        # Index in graph (entities + memory node)
-        if self.graph:
+        # Index in graph (entities + memory node) — skip private memories
+        if self.graph and not metadata.get("private", False):
             try:
                 from graph_layer import extract_entities
                 self.graph.upsert_memory_node(doc_id, content, category, time.time())
