@@ -334,6 +334,11 @@ else
     echo "   mkdir -p ~/.claude/commands && docker cp engram-memory:/app/commands/. ~/.claude/commands/"
 fi
 
+# Install auto-capture hooks
+echo "Installing auto-capture hooks..."
+chmod +x "$ENGRAM_REPO_DIR/scripts/hooks/engram_hook.py" 2>/dev/null || true
+python3 "$ENGRAM_REPO_DIR/bridge/install.py" --all-hooks 2>/dev/null || echo "  (hook installation skipped — run manually if needed)"
+
 # Success message
 echo ""
 echo -e "${GREEN}Engram setup complete!${NC}"

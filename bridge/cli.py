@@ -20,7 +20,7 @@ from .config import (
     write_config_template,
 )
 from .client import EngramClient
-from .install import install_claude_code_hook
+from .install import install_claude_code_hook, install_all_hooks
 from .project import detect_project
 from .pull import PullOutcome, run_pull
 
@@ -96,6 +96,12 @@ def _build_parser() -> argparse.ArgumentParser:
             "Create ~/.engram/config.yaml from the template if it "
             "doesn't exist."
         ),
+    )
+    install.add_argument(
+        "--all-hooks",
+        dest="all_hooks",
+        action="store_true",
+        help="Install all engram auto-capture hooks",
     )
 
     hive = sub.add_parser(
@@ -227,6 +233,11 @@ def _status_json(cfg: BridgeConfig, project) -> int:
 
 def _cmd_install(args: argparse.Namespace) -> int:
     did_anything = False
+    if getattr(args, "all_hooks", False):
+        results = install_all_hooks()
+        for r in results:
+            sys.stdout.write(f"  {r.action}: {r.message}\n")
+        return 0
     if args.write_template:
         path = write_config_template()
         sys.stdout.write(
