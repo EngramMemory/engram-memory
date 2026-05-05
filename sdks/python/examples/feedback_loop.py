@@ -19,7 +19,7 @@ from __future__ import annotations
 import sys
 from typing import Iterable, Tuple
 
-from engram import (
+from engrammemory import (
     EngramClient,
     EngramError,
     SearchResult,

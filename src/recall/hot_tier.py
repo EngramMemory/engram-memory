@@ -46,6 +46,7 @@ class HotMemory:
     metadata: Dict = field(default_factory=dict)
     access_timestamps: List[float] = field(default_factory=list)  # Per-hit times, capped
     stability: float = 1.0    # Grows with spaced retrieval
+    private: bool = False
 
     def to_dict(self) -> dict:
         return {
@@ -59,6 +60,7 @@ class HotMemory:
             "metadata": self.metadata,
             "access_timestamps": self.access_timestamps,
             "stability": self.stability,
+            "private": self.private,
         }
 
     @classmethod
@@ -89,6 +91,7 @@ class HotMemory:
             metadata=d.get("metadata", {}),
             access_timestamps=timestamps,
             stability=d.get("stability", 1.0),
+            private=d.get("private", False),
         )
 
 

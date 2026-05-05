@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import sys
 
-from engram import (
+from engrammemory import (
     EngramAuthError,
     EngramClient,
     EngramError,

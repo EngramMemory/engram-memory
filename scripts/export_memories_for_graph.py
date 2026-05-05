@@ -285,6 +285,12 @@ def main() -> int:
         default=5,
         help="Max nearest neighbors queried per memory",
     )
+    parser.add_argument(
+        "--include-private",
+        action="store_true",
+        default=False,
+        help="Include private memories in export (excluded by default)",
+    )
     args = parser.parse_args()
 
     out_dir = Path(args.output).expanduser().resolve()
@@ -305,6 +311,9 @@ def main() -> int:
     used_names: set[str] = set()
     written = 0
     for point in points:
+        payload = point.get("payload") or {}
+        if not args.include_private and payload.get("private", False):
+            continue
         base = safe_filename(point.get("id", "memory"))
         name = f"{base}.md"
         i = 1

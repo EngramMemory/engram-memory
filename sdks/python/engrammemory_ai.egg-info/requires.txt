@@ -1,0 +1,5 @@
+httpx<1.0,>=0.25
+
+[dev]
+pytest>=7
+build>=1.0

@@ -77,6 +77,26 @@ _CATEGORY_PATTERNS = {
     "entity": re.compile(r"\b(company|team|person|project|service|app|platform|organization|department|manager|lead|owner|maintainer|vendor|client|VP|CTO|CEO|engineer)\b", re.IGNORECASE),
 }
 
+# ─── Privacy ─────────────────────────────────────────────────────────
+PRIVATE_TAG_RE = re.compile(r"<private>(.*?)</private>", re.DOTALL)
+SENSITIVE_RE = re.compile(
+    r"(?:key|secret|token|password|passwd|api[_\-]?key|credentials?)\s*[:=]\s*\S{20,}",
+    re.IGNORECASE,
+)
+
+
+def _strip_private_tags(content: str) -> tuple:
+    """Strip <private> tags from content. Returns (cleaned_content, had_tags)."""
+    if "<private>" not in content:
+        return content, False
+    cleaned = PRIVATE_TAG_RE.sub(r"\1", content)
+    return cleaned, True
+
+
+def _detect_sensitive(content: str) -> bool:
+    """Auto-detect likely secrets in content."""
+    return bool(SENSITIVE_RE.search(content))
+
 
 def text_to_sparse_vector(text: str, boost_specifics: bool = False) -> Dict:
     """Convert text to a sparse vector for Qdrant hybrid search.
@@ -537,6 +557,15 @@ class EngramRecallEngine:
         if doc_id is None:
             doc_id = str(uuid.uuid4())
 
+        # Privacy: strip <private> tags and auto-detect secrets
+        if metadata is None:
+            metadata = {}
+        content, had_private_tags = _strip_private_tags(content)
+        is_private = metadata.get("private", False) or had_private_tags
+        if not is_private and _detect_sensitive(content):
+            is_private = True
+        metadata["private"] = is_private
+
         # Embed (document prefix for storage) — always local, always fast
         vector = await self._embed(content, type="document")
 
@@ -596,8 +625,8 @@ class EngramRecallEngine:
         # Index in Multi-Head Hasher (Tier 2)
         self.hasher.index(vector, doc_id)
 
-        # Index in graph (entities + memory node)
-        if self.graph:
+        # Index in graph (entities + memory node) — skip private memories
+        if self.graph and not metadata.get("private", False):
             try:
                 from graph_layer import extract_entities
                 self.graph.upsert_memory_node(doc_id, content, category, time.time())
@@ -1243,6 +1272,127 @@ class EngramRecallEngine:
             logger.debug(f"Forgot memory: {doc_id}")
 
         return removed
+
+    # --- Direct Fetch & Timeline ---
+
+    async def get_by_ids(self, doc_ids: list) -> list:
+        """Fetch full memory details by ID(s)."""
+        if not doc_ids:
+            return []
+
+        try:
+            resp = await self._http.post(
+                f"{self.config.qdrant_url}/collections/{self.config.collection}/points",
+                json={"ids": doc_ids, "with_payload": True, "with_vector": False},
+            )
+            resp.raise_for_status()
+            points = resp.json().get("result", [])
+        except Exception:
+            return []
+
+        results = []
+        for p in points:
+            pid = str(p.get("id", ""))
+            pl = p.get("payload", {})
+            content = pl.get("content", pl.get("text", ""))
+            category = pl.get("category", "other")
+            created_at = pl.get("created_at", 0.0)
+            access_count = pl.get("access_count", 0)
+            private = pl.get("private", False)
+
+            mr = MemoryResult(
+                doc_id=pid,
+                content=content,
+                score=1.0,
+                tier="direct",
+                category=category,
+                metadata=pl,
+                created_at=created_at,
+                access_count=access_count,
+                private=private,
+            )
+
+            if self.graph:
+                try:
+                    related = self.graph.get_related_memory_ids(pid, max_hops=1)
+                    entities = []
+                    try:
+                        entity_data = self.graph.get_memories_for_entity(pid)
+                        if entity_data:
+                            entities = [e.get("name", "") for e in entity_data if e.get("name")]
+                    except Exception:
+                        pass
+                    mr.metadata["connections"] = {
+                        "related": related[:10],
+                        "entities": entities[:10],
+                    }
+                except Exception:
+                    pass
+
+            results.append(mr)
+
+        return results
+
+    async def timeline(self, hours: int = 24, category: str = None, limit: int = 20) -> list:
+        """Browse recent memories chronologically."""
+        import time as _time
+
+        cutoff = _time.time() - (hours * 3600) if hours > 0 else 0
+
+        must_conditions = []
+        if cutoff > 0:
+            must_conditions.append({
+                "key": "created_at",
+                "range": {"gte": cutoff},
+            })
+        if category:
+            must_conditions.append({
+                "key": "category",
+                "match": {"value": category},
+            })
+
+        scroll_filter = {"must": must_conditions} if must_conditions else None
+
+        payload = {
+            "limit": limit,
+            "with_payload": True,
+            "with_vector": False,
+            "order_by": [{"key": "created_at", "direction": "desc"}],
+        }
+        if scroll_filter:
+            payload["filter"] = scroll_filter
+
+        try:
+            resp = await self._http.post(
+                f"{self.config.qdrant_url}/collections/{self.config.collection}/points/scroll",
+                json=payload,
+            )
+            resp.raise_for_status()
+            points = resp.json().get("result", {}).get("points", [])
+        except Exception:
+            return []
+
+        results = []
+        for p in points:
+            pid = str(p.get("id", ""))
+            pl = p.get("payload", {})
+            content = pl.get("content", pl.get("text", ""))
+            category_val = pl.get("category", "other")
+            created_at = pl.get("created_at", 0.0)
+            private = pl.get("private", False)
+
+            mr = MemoryResult(
+                doc_id=pid,
+                content=content,
+                score=0.0,
+                tier="timeline",
+                category=category_val,
+                created_at=created_at,
+                private=private,
+            )
+            results.append(mr)
+
+        return results
 
     # --- Context Injection ---
 

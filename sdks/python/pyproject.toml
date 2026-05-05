@@ -3,14 +3,14 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "engram-py"
-version = "0.1.0"
-description = "Official Python SDK for the Engram cloud memory API."
+name = "engrammemory-ai"
+version = "0.3.0"
+description = "Memory infrastructure for AI agents. Your Qdrant, your hardware, our intelligence."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
 authors = [
-  { name = "Engram Memory" }
+  { name = "Engram Memory", email = "hello@engrammemory.ai" }
 ]
 keywords = [
   "engram",
@@ -49,4 +49,4 @@ Documentation = "https://engrammemory.ai/docs"
 Source = "https://github.com/engram-memory/engram-memory-community"
 
 [tool.setuptools]
-packages = ["engram"]
+packages = ["engrammemory"]

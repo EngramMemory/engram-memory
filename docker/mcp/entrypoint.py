@@ -43,6 +43,7 @@ from mcp_server import EngramMCPServer
 from models import EngramConfig
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from mcp.server.sse import SseServerTransport
+from dashboard import register_dashboard_routes
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 logger = logging.getLogger("engram-mcp-docker")
@@ -120,6 +121,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Engram Memory MCP Server", version="2.1.0", lifespan=lifespan)
+register_dashboard_routes(app, mcp_server)
 
 
 # ── MCP transports ─────────────────────────────────────────────────────────
@@ -216,17 +218,19 @@ async def search(request: Request):
     query = body.get("query", "")
     limit = body.get("limit", 10)
     category = body.get("category")
+    detail = body.get("detail", "compact")
     if not query:
         return JSONResponse({"error": "query is required"}, status_code=400)
     try:
         results = await mcp_server.engine.search(
             query=query, top_k=limit, category=category
         )
+        serializer = (lambda r: r.to_dict()) if detail == "full" else (lambda r: r.to_compact_dict())
         return {
             "query": query,
             "total_results": len(results),
             "tiers_used": list(set(r.tier for r in results)),
-            "results": [r.to_dict() for r in results],
+            "results": [serializer(r) for r in results],
         }
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)

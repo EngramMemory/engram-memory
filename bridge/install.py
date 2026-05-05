@@ -29,6 +29,30 @@ CLAUDE_SETTINGS_PATH = Path.home() / ".claude" / "settings.json"
 HOOK_MARKER = "engram-bridge-pull"
 HOOK_COMMAND = "engram bridge pull"
 
+# All engram hooks (auto-capture system)
+ENGRAM_HOOKS = {
+    "SessionStart": {
+        "id": "engram-session-start",
+        "subcommand": "session-start",
+        "timeout": 10000,
+    },
+    "PostToolUse": {
+        "id": "engram-post-tool-use",
+        "subcommand": "post-tool-use",
+        "timeout": 5000,
+    },
+    "UserPromptSubmit": {
+        "id": "engram-user-prompt",
+        "subcommand": "user-prompt",
+        "timeout": 5000,
+    },
+    "Stop": {
+        "id": "engram-stop",
+        "subcommand": "stop",
+        "timeout": 30000,
+    },
+}
+
 
 @dataclass
 class InstallResult:
@@ -57,6 +81,13 @@ def _backup(path: Path) -> Optional[Path]:
     backup = path.with_suffix(path.suffix + ".bak-" + stamp)
     shutil.copy2(path, backup)
     return backup
+
+
+def _repo_root() -> Path:
+    """Find the engram-memory-community repo root."""
+    here = Path(__file__).resolve().parent
+    # bridge/install.py → repo root is parent
+    return here.parent
 
 
 def _hook_entry() -> Dict[str, Any]:
@@ -96,6 +127,63 @@ def _already_installed(session_start: List[Any]) -> bool:
             if isinstance(cmd, str) and cmd.strip() == HOOK_COMMAND:
                 return True
     return False
+
+
+def install_all_hooks(settings_path: Path = CLAUDE_SETTINGS_PATH) -> List[InstallResult]:
+    """Register all engram hooks (auto-capture, session summary, etc.)."""
+    results = []
+    settings = _load_settings(settings_path)
+    backup_path = _backup(settings_path)
+
+    hooks = settings.setdefault("hooks", {})
+    repo_root = _repo_root()
+    hook_script = repo_root / "scripts" / "hooks" / "engram_hook.py"
+
+    changed = False
+    for event_type, config in ENGRAM_HOOKS.items():
+        event_hooks = hooks.setdefault(event_type, [])
+
+        # Check if already installed (by id)
+        already = any(
+            h.get("id") == config["id"]
+            for entry in event_hooks
+            for h in entry.get("hooks", [])
+        )
+        if already:
+            results.append(InstallResult(
+                settings_path=settings_path,
+                backup_path=backup_path,
+                changed=False,
+                action="already-installed",
+                message=f"{event_type} hook '{config['id']}' already installed",
+            ))
+            continue
+
+        entry = {
+            "matcher": "*",
+            "hooks": [{
+                "type": "command",
+                "command": f"python3 {hook_script} {config['subcommand']}",
+                "timeout": config["timeout"],
+                "id": config["id"],
+            }],
+        }
+        event_hooks.append(entry)
+        changed = True
+        results.append(InstallResult(
+            settings_path=settings_path,
+            backup_path=backup_path,
+            changed=True,
+            action="added",
+            message=f"Added {event_type} hook '{config['id']}'",
+        ))
+
+    if changed:
+        settings_path.parent.mkdir(parents=True, exist_ok=True)
+        with settings_path.open("w", encoding="utf-8") as fh:
+            json.dump(settings, fh, indent=2)
+
+    return results
 
 
 def install_claude_code_hook(
@@ -151,3 +239,18 @@ def install_claude_code_hook(
         action=action,
         message=message,
     )
+
+
+if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--all-hooks", action="store_true", help="Install all engram hooks")
+    args = parser.parse_args()
+
+    if args.all_hooks:
+        results = install_all_hooks()
+        for r in results:
+            print(f"  {r.action}: {r.message}")
+    else:
+        result = install_claude_code_hook()
+        print(f"  {result.action}: {result.message}")

@@ -1,0 +1,234 @@
+Metadata-Version: 2.4
+Name: engrammemory-ai
+Version: 0.3.0
+Summary: Memory infrastructure for AI agents. Your Qdrant, your hardware, our intelligence.
+Author-email: Engram Memory <hello@engrammemory.ai>
+License: MIT
+Project-URL: Homepage, https://engrammemory.ai
+Project-URL: Documentation, https://engrammemory.ai/docs
+Project-URL: Source, https://github.com/engram-memory/engram-memory-community
+Keywords: engram,memory,llm,agent,context,vector-search,sdk
+Classifier: Development Status :: 4 - Beta
+Classifier: Intended Audience :: Developers
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3 :: Only
+Classifier: Programming Language :: Python :: 3.9
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Classifier: Topic :: Software Development :: Libraries :: Python Modules
+Requires-Python: >=3.9
+Description-Content-Type: text/markdown
+Requires-Dist: httpx<1.0,>=0.25
+Provides-Extra: dev
+Requires-Dist: pytest>=7; extra == "dev"
+Requires-Dist: build>=1.0; extra == "dev"
+
+# engram-py
+
+Official Python SDK for the **[Engram](https://engrammemory.ai)** cloud memory API.
+
+A thin, dependency-light client (`httpx` only) for storing and recalling
+memories, managing hive-shared collections, and feeding reranking
+signals back to the engine. Ships both a blocking `EngramClient` and
+an `AsyncEngramClient` so you can drop it into scripts, background
+workers, or FastAPI handlers without a second SDK.
+
+## Install
+
+```bash
+pip install engram-py
+```
+
+Or install the in-repo copy for local development:
+
+```bash
+pip install -e ./sdks/python
+```
+
+The only runtime dependency is `httpx>=0.25`. Python 3.9+ supported.
+
+## Authentication
+
+Every call needs a cloud API key. Grab one from the dashboard at
+[engrammemory.ai](https://engrammemory.ai) and pass it to the client
+constructor, or export it and let the SDK pick it up automatically:
+
+```bash
+export ENGRAM_API_KEY=pr_live_...
+```
+
+```python
+from engram import EngramClient
+
+client = EngramClient()                # reads ENGRAM_API_KEY
+# or
+client = EngramClient(api_key="pr_live_...")
+```
+
+## Quickstart
+
+Store a memory, search for it, feed the result back:
+
+```python
+from engram import EngramClient
+
+client = EngramClient()
+
+client.store(
+    "Production Postgres runs on port 5433 with pgvector 0.7.0",
+    category="infra",
+    importance=0.9,
+)
+
+hits = client.search("what port does prod postgres use")
+for result in hits.results:
+    print(f"{result.score:.2f}  {result.text}")
+```
+
+## Hive access (grant-based)
+
+Hives are API-key-based access groups. Grant or revoke access by API
+key prefix. An unauthorized scope raises `EngramAPIError` with status
+403.
+
+```python
+from engram import EngramClient
+
+client = EngramClient()
+
+hive = client.create_hive(name="Platform Ops", slug="platform-ops")
+client.grant_hive_access(hive.id, key_prefix="eng_live_abc", permission="readwrite")
+
+# List grants on a hive.
+grants = client.list_hive_grants(hive.id)
+
+# Search the hive collection.
+hits = client.search(
+    "what messaging system do we use",
+    scope=f"hive:{hive.id}",
+)
+
+# Revoke access.
+client.revoke_hive_access(hive.id, key_prefix="eng_live_abc")
+```
+
+## Feedback loop
+
+After your model picks which memories to actually keep in context,
+tell the cloud so it can reinforce the useful ones and penalize the
+noise. Zero LLM cost — the judgment comes from your existing pass.
+
+```python
+from engram import EngramClient
+
+client = EngramClient()
+
+query = "who owns the billing service"
+hits = client.search(query, top_k=10)
+
+# Your model reads all 10 and decides which 2 it keeps.
+selected = [hits.results[0].id, hits.results[1].id]
+rejected = [h.id for h in hits.results[2:]]
+
+client.feedback(query=query, selected_ids=selected, rejected_ids=rejected)
+```
+
+## Error handling
+
+All SDK errors inherit from `EngramError`, so you can catch everything
+with a single handler if you want to. More specific subclasses exist
+for the cases worth branching on.
+
+```python
+from engram import (
+    EngramClient,
+    EngramError,
+    EngramAuthError,
+    EngramRateLimitError,
+    EngramAPIError,
+    EngramConnectionError,
+)
+
+client = EngramClient()
+
+try:
+    client.search("ping")
+except EngramAuthError:
+    # 401 — bad / revoked key. Surface to a human.
+    raise
+except EngramRateLimitError as exc:
+    # 429 — sleep exc.retry_after seconds if the server gave us one.
+    sleep_for = exc.retry_after or 5.0
+    ...
+except EngramAPIError as exc:
+    # Other 4xx or 5xx after retries are exhausted.
+    print(f"API error {exc.status_code}: {exc.message}")
+except EngramConnectionError as exc:
+    # Network trouble — cause chains to the original httpx error.
+    print(f"Connection failed: {exc.__cause__}")
+except EngramError:
+    raise
+```
+
+The SDK automatically retries 5xx responses and transient network
+errors with exponential backoff (up to `max_retries`, default 3). 401
+and non-429 4xx are never retried.
+
+## Async
+
+Everything above works the same with `AsyncEngramClient`:
+
+```python
+import asyncio
+from engram import AsyncEngramClient
+
+async def main():
+    async with AsyncEngramClient() as client:
+        await client.store("I prefer tabs over spaces", category="opinions")
+        hits = await client.search("what does eddy prefer for indentation")
+        for hit in hits.results:
+            print(hit.text)
+
+asyncio.run(main())
+```
+
+## Configuration
+
+```python
+EngramClient(
+    api_key=None,                              # or ENGRAM_API_KEY
+    base_url="https://api.engrammemory.ai",    # override for self-hosted
+    timeout=30.0,                              # seconds
+    max_retries=3,                             # retries after first attempt
+    retry_backoff=0.5,                         # base seconds for expo backoff
+)
+```
+
+## What's exposed
+
+| Method                               | Endpoint                                       |
+| ------------------------------------ | ---------------------------------------------- |
+| `store(text, ...)`                   | `POST /v1/store`                               |
+| `search(query, top_k, scope, ...)`   | `POST /v1/search`                              |
+| `forget(memory_id)`                  | `POST /v1/forget`                              |
+| `feedback(query, selected, rejected)`| `POST /v1/feedback`                            |
+| `create_hive(name, slug)`            | `POST /v1/hives`                               |
+| `list_hives()`                       | `GET /v1/hives`                                |
+| `grant_hive_access(hive_id, key_prefix)` | `POST /v1/hives/{hive_id}/grants`          |
+| `revoke_hive_access(hive_id, key_prefix)` | `DELETE /v1/hives/{hive_id}/grants/{key_prefix}` |
+| `list_hive_grants(hive_id)`          | `GET /v1/hives/{hive_id}/grants`               |
+| `health()`                           | `GET /v1/health`                               |
+
+See `examples/` for runnable end-to-end snippets.
+
+## Links
+
+- API reference: [engrammemory.ai/docs](https://engrammemory.ai/docs)
+- Main community repo: [engram-memory/engram-memory-community](https://github.com/engram-memory/engram-memory-community)
+- Bridge daemon: `../../bridge/` in this repo (same cloud API, different surface)
+
+## License
+
+MIT — see `../LICENSE` at the repo root.
