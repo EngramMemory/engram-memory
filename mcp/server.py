@@ -37,7 +37,10 @@ import json
 import logging
 import os
 import sys
-from typing import Any, Dict, Optional
+import urllib.error
+import urllib.parse
+import urllib.request
+from typing import Any, Dict, List, Optional
 
 # Add src/recall to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src", "recall"))
@@ -131,6 +134,11 @@ class EngramMCPServer:
                                 "default": False,
                                 "description": "Mark memory as private. Private memories are excluded from exports, consolidation, and graph connections.",
                             },
+                            "share_with": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "Hive scopes to also write this memory to (e.g. [\"hive:uuid\"]). Requires ENGRAM_API_KEY.",
+                            },
                         },
                         "required": ["text"],
                     },
@@ -155,6 +163,10 @@ class EngramMCPServer:
                                 "enum": ["compact", "full"],
                                 "default": "compact",
                                 "description": "Response detail level. compact returns 6 fields, full returns all 14.",
+                            },
+                            "scope": {
+                                "type": "string",
+                                "description": "Search scope — when set, searches cloud API instead of local recall (e.g. \"hive:uuid\"). Requires ENGRAM_API_KEY.",
                             },
                         },
                         "required": ["query"],
@@ -301,6 +313,80 @@ class EngramMCPServer:
                         },
                     },
                 ),
+                Tool(
+                    name="hive_list",
+                    title="List Hives",
+                    description="List all hives the authenticated user has access to. Requires ENGRAM_API_KEY.",
+                    annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False),
+                    inputSchema={
+                        "type": "object",
+                        "properties": {},
+                    },
+                ),
+                Tool(
+                    name="hive_create",
+                    title="Create Hive",
+                    description="Create a new shared memory hive. Requires ENGRAM_API_KEY.",
+                    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False),
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string", "description": "Human-readable hive name"},
+                            "slug": {
+                                "type": "string",
+                                "description": "URL-safe identifier — lowercase alphanumeric + hyphens, 3-48 chars",
+                            },
+                        },
+                        "required": ["name", "slug"],
+                    },
+                ),
+                Tool(
+                    name="hive_grant",
+                    title="Grant Hive Access",
+                    description="Grant an API key prefix access to a hive. Requires ENGRAM_API_KEY.",
+                    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False),
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "hive_id": {"type": "string", "description": "Hive UUID"},
+                            "key_prefix": {"type": "string", "description": "API key prefix to grant access to"},
+                            "permission": {
+                                "type": "string",
+                                "enum": ["read", "readwrite"],
+                                "default": "readwrite",
+                                "description": "Permission level",
+                            },
+                        },
+                        "required": ["hive_id", "key_prefix"],
+                    },
+                ),
+                Tool(
+                    name="hive_revoke",
+                    title="Revoke Hive Access",
+                    description="Revoke an API key prefix's access to a hive. Requires ENGRAM_API_KEY.",
+                    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True),
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "hive_id": {"type": "string", "description": "Hive UUID"},
+                            "key_prefix": {"type": "string", "description": "API key prefix to revoke"},
+                        },
+                        "required": ["hive_id", "key_prefix"],
+                    },
+                ),
+                Tool(
+                    name="hive_grants_list",
+                    title="List Hive Grants",
+                    description="List all active grants for a hive. Requires ENGRAM_API_KEY.",
+                    annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False),
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "hive_id": {"type": "string", "description": "Hive UUID"},
+                        },
+                        "required": ["hive_id"],
+                    },
+                ),
             ]
 
         @self.server.call_tool()
@@ -325,6 +411,16 @@ class EngramMCPServer:
                 result = await self._handle_get(arguments)
             elif name == "memory_timeline":
                 result = await self._handle_timeline(arguments)
+            elif name == "hive_list":
+                result = await self._handle_hive_list()
+            elif name == "hive_create":
+                result = await self._handle_hive_create(**arguments)
+            elif name == "hive_grant":
+                result = await self._handle_hive_grant(**arguments)
+            elif name == "hive_revoke":
+                result = await self._handle_hive_revoke(**arguments)
+            elif name == "hive_grants_list":
+                result = await self._handle_hive_grants_list(**arguments)
             else:
                 raise ValueError(f"Unknown tool: {name}")
 
@@ -333,8 +429,15 @@ class EngramMCPServer:
     # ── Tool Handlers ───────────────────────────────────────────────
 
     async def _handle_store(
-        self, text: str, category: str = "other", importance: float = 0.5, private: bool = False, **_
+        self,
+        text: str,
+        category: str = "other",
+        importance: float = 0.5,
+        private: bool = False,
+        share_with: Optional[List[str]] = None,
+        **_,
     ) -> Dict[str, Any]:
+        result: Dict[str, Any] = {"success": False, "error": "Recall engine not available"}
         try:
             if self.engine:
                 doc_id, resolved_category = await self.engine.store(
@@ -343,16 +446,52 @@ class EngramMCPServer:
                     metadata={"importance": importance, "private": private},
                 )
                 logger.info(f"Stored memory {doc_id} via recall engine")
-                return {"success": True, "memory_id": doc_id, "category": resolved_category}
-            else:
-                return {"success": False, "error": "Recall engine not available"}
+                result = {"success": True, "memory_id": doc_id, "category": resolved_category}
         except Exception as e:
             logger.error(f"Store failed: {e}")
-            return {"success": False, "error": str(e)}
+            result = {"success": False, "error": str(e)}
+
+        if share_with and self._api_key:
+            hive_results = {}
+            for scope in share_with:
+                hive_id = scope.removeprefix("hive:")
+                cloud_resp = await self._cloud_request(
+                    "POST",
+                    f"/v1/hives/{hive_id}/memories",
+                    body={"text": text, "category": category, "importance": importance},
+                )
+                hive_results[scope] = cloud_resp
+            result["shared"] = hive_results
+
+        return result
 
     async def _handle_search(
-        self, query: str, limit: int = 10, category: Optional[str] = None, detail: str = "compact", **_
+        self,
+        query: str,
+        limit: int = 10,
+        category: Optional[str] = None,
+        detail: str = "compact",
+        scope: Optional[str] = None,
+        **_,
     ) -> Dict[str, Any]:
+        # Cloud-scoped search (e.g. "hive:uuid")
+        if scope and self._api_key:
+            hive_id = scope.removeprefix("hive:")
+            params = f"q={urllib.parse.quote(query)}&limit={limit}"
+            if category:
+                params += f"&category={urllib.parse.quote(category)}"
+            cloud_resp = await self._cloud_request(
+                "GET",
+                f"/v1/hives/{hive_id}/memories/search?{params}",
+            )
+            memories = cloud_resp.get("results", cloud_resp.get("memories", []))
+            return {
+                "query": query,
+                "scope": scope,
+                "total_results": len(memories),
+                "results": memories,
+            }
+
         try:
             if self.engine:
                 results = await self.engine.search(
@@ -494,6 +633,53 @@ class EngramMCPServer:
             "total_results": len(results),
             "results": [r.to_compact_dict() for r in results],
         }
+
+    # ── Hive Handlers ───────────────────────────────────────────────
+
+    async def _handle_hive_list(self) -> Dict[str, Any]:
+        resp = await self._cloud_request("GET", "/v1/hives")
+        if "error" in resp:
+            return {"success": False, **resp}
+        hives = resp.get("hives", resp if isinstance(resp, list) else [])
+        return {"success": True, "hives": hives, "total": len(hives)}
+
+    async def _handle_hive_create(self, name: str, slug: str, **_) -> Dict[str, Any]:
+        resp = await self._cloud_request("POST", "/v1/hives", body={"name": name, "slug": slug})
+        if "error" in resp:
+            return {"success": False, **resp}
+        return {"success": True, **resp}
+
+    async def _handle_hive_grant(
+        self,
+        hive_id: str,
+        key_prefix: str,
+        permission: str = "readwrite",
+        **_,
+    ) -> Dict[str, Any]:
+        resp = await self._cloud_request(
+            "POST",
+            f"/v1/hives/{hive_id}/grants",
+            body={"key_prefix": key_prefix, "permission": permission},
+        )
+        if "error" in resp:
+            return {"success": False, **resp}
+        return {"success": True, **resp}
+
+    async def _handle_hive_revoke(self, hive_id: str, key_prefix: str, **_) -> Dict[str, Any]:
+        resp = await self._cloud_request(
+            "DELETE",
+            f"/v1/hives/{hive_id}/grants/{key_prefix}",
+        )
+        if "error" in resp:
+            return {"success": False, **resp}
+        return {"success": True, **resp}
+
+    async def _handle_hive_grants_list(self, hive_id: str, **_) -> Dict[str, Any]:
+        resp = await self._cloud_request("GET", f"/v1/hives/{hive_id}/grants")
+        if "error" in resp:
+            return {"success": False, **resp}
+        grants = resp.get("grants", [])
+        return {"success": True, "hive_id": hive_id, "grants": grants, "total": len(grants)}
 
 
 async def main():
