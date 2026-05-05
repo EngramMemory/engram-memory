@@ -546,7 +546,7 @@ class EngramMCPServer:
     async def _handle_recall(
         self, context: str, limit: int = 5, **_
     ) -> Dict[str, Any]:
-        """Recall = search with higher threshold, for context injection."""
+        """Recall relevant memories for context. Routes to cloud hive when one is active."""
         return await self._handle_search(query=context, limit=limit)
 
     async def _handle_forget(
@@ -728,7 +728,11 @@ class EngramMCPServer:
             req = urllib.request.Request(url, data=data, headers=headers, method=method)
             try:
                 with urllib.request.urlopen(req, timeout=10) as resp:
-                    return json.loads(resp.read().decode())
+                    raw = resp.read().decode()
+                    try:
+                        return json.loads(raw)
+                    except json.JSONDecodeError:
+                        return {"error": f"Non-JSON response from cloud API (status {resp.status})"}
             except urllib.error.HTTPError as e:
                 try:
                     detail = json.loads(e.read().decode())
