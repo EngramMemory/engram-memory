@@ -107,14 +107,16 @@ class EngramMCPServer:
             await self.engine.shutdown()
             logger.info("Recall engine shut down — state persisted")
 
-    def _get_active_hive(self) -> Optional[str]:
+    def _get_active_hive(self) -> tuple[Optional[str], Optional[str]]:
         path = os.path.join(self.config.data_dir, "active_hive")
         try:
             with open(path, "r") as f:
-                hive_id = f.read().strip()
-                return hive_id if hive_id else None
+                lines = f.read().strip().splitlines()
+                hive_id = lines[0].strip() if lines else None
+                activated_at = lines[1].strip() if len(lines) > 1 else None
+                return (hive_id if hive_id else None, activated_at)
         except FileNotFoundError:
-            return None
+            return (None, None)
 
     # ── Tool Registration ───────────────────────────────────────────
 
@@ -466,7 +468,7 @@ class EngramMCPServer:
             logger.error(f"Store failed: {e}")
             result = {"success": False, "error": str(e)}
 
-        active_hive = self._get_active_hive()
+        active_hive, activated_at = self._get_active_hive()
         all_targets: set = set(share_with or [])
         if active_hive:
             all_targets.add(f"hive:{active_hive}")
@@ -481,6 +483,9 @@ class EngramMCPServer:
                     body={"text": text, "category": category, "importance": importance},
                 )
                 hive_results[scope] = cloud_resp
+                if hive_id == active_hive and result.get("memory_id"):
+                    doc_id = result["memory_id"]
+                    logger.info(f"Memory {doc_id} shared to hive:{active_hive} (active since {activated_at})")
             result["shared"] = hive_results
 
         return result
@@ -494,8 +499,7 @@ class EngramMCPServer:
         scope: Optional[str] = None,
         **_,
     ) -> Dict[str, Any]:
-        # Explicit scope overrides active hive; otherwise use file-based active hive
-        active_hive = self._get_active_hive()
+        active_hive, activated_at = self._get_active_hive()
         if scope:
             target_hive = scope.removeprefix("hive:")
         elif active_hive:
@@ -503,7 +507,7 @@ class EngramMCPServer:
         else:
             target_hive = None
 
-        cloud_memories: List[Dict] = []
+        # Hive active: cloud only — local pre-hive memories are excluded
         if target_hive and self._api_key:
             params = f"q={urllib.parse.quote(query)}&limit={limit}"
             if category:
@@ -512,38 +516,32 @@ class EngramMCPServer:
                 "GET",
                 f"/v1/hives/{target_hive}/memories/search?{params}",
             )
-            cloud_memories = cloud_resp.get("results", cloud_resp.get("memories", []))
-            for mem in cloud_memories:
-                mem["_source"] = f"hive:{target_hive}"
+            memories = cloud_resp.get("results", cloud_resp.get("memories", []))
+            return {
+                "query": query,
+                "total_results": len(memories),
+                "active_hive": f"hive:{target_hive}",
+                "activated_at": activated_at,
+                "results": memories,
+            }
 
-        local_memories: List[Dict] = []
-        tiers_used: List[str] = []
+        # No hive: local only
         try:
             if self.engine:
                 results = await self.engine.search(query=query, top_k=limit, category=category)
-                local_memories = [r.to_dict() if detail == "full" else r.to_compact_dict() for r in results]
+                memories = [r.to_dict() if detail == "full" else r.to_compact_dict() for r in results]
                 tiers_used = list(set(r.tier for r in results))
+                return {
+                    "query": query,
+                    "total_results": len(memories),
+                    "tiers_used": tiers_used,
+                    "active_hive": None,
+                    "results": memories,
+                }
+            return {"query": query, "total_results": 0, "results": [], "error": "Recall engine not available"}
         except Exception as e:
-            logger.error(f"Local search failed: {e}")
-
-        # Merge cloud first (hive context), then local — deduplicate by id
-        seen_ids: set = set()
-        merged: List[Dict] = []
-        for mem in cloud_memories + local_memories:
-            mid = mem.get("id") or mem.get("memory_id") or mem.get("doc_id")
-            key = mid if mid else id(mem)
-            if key not in seen_ids:
-                seen_ids.add(key)
-                merged.append(mem)
-        merged = merged[:limit]
-
-        return {
-            "query": query,
-            "total_results": len(merged),
-            "tiers_used": tiers_used,
-            "active_hive": f"hive:{target_hive}" if target_hive else None,
-            "results": merged,
-        }
+            logger.error(f"Search failed: {e}")
+            return {"query": query, "total_results": 0, "results": [], "error": str(e)}
 
     async def _handle_recall(
         self, context: str, limit: int = 5, **_
