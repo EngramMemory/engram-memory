@@ -30,6 +30,10 @@ Environment Variables:
     FASTEMBED_URL       - FastEmbed service URL (default: http://localhost:11435)
     COLLECTION_NAME     - Qdrant collection name (default: agent-memory)
     DEBUG               - Enable debug logging (default: false)
+    ENGRAM_API_KEY      - Cloud API key for hive access (optional)
+    ENGRAM_API_URL      - Cloud API endpoint (default: https://api.engrammemory.ai)
+    ENGRAM_HIVE_ID      - Hive UUID — when set, all stores auto-share to this hive
+                          and searches default to cloud scope
 """
 
 import asyncio
@@ -76,6 +80,9 @@ class EngramMCPServer:
 
     def __init__(self, config: EngramConfig):
         self.config = config
+        self._api_key = config.api_key
+        self._api_url = config.api_url
+        self._hive_id = os.getenv("ENGRAM_HIVE_ID", "")
         self.engine: Optional[EngramRecallEngine] = None
         self.server = Server("engrammemory")
         self._register_tools()
@@ -85,6 +92,10 @@ class EngramMCPServer:
         logger.info(f"  FastEmbed: {config.embedding_url}")
         logger.info(f"  Collection: {config.collection}")
         logger.info(f"  Recall Engine: {'enabled' if RECALL_ENGINE_AVAILABLE else 'disabled (fallback mode)'}")
+        if self._hive_id:
+            logger.info(f"  Hive: {self._hive_id} (auto-routing all stores + searches)")
+        if self._api_key:
+            logger.info(f"  Cloud: connected ({self._api_url})")
 
     async def startup(self):
         """Initialize the recall engine."""
@@ -451,9 +462,13 @@ class EngramMCPServer:
             logger.error(f"Store failed: {e}")
             result = {"success": False, "error": str(e)}
 
-        if share_with and self._api_key:
+        effective_share_with = list(share_with or [])
+        if self._hive_id and f"hive:{self._hive_id}" not in effective_share_with:
+            effective_share_with.append(f"hive:{self._hive_id}")
+
+        if effective_share_with and self._api_key:
             hive_results = {}
-            for scope in share_with:
+            for scope in effective_share_with:
                 hive_id = scope.removeprefix("hive:")
                 cloud_resp = await self._cloud_request(
                     "POST",
@@ -475,8 +490,9 @@ class EngramMCPServer:
         **_,
     ) -> Dict[str, Any]:
         # Cloud-scoped search (e.g. "hive:uuid")
-        if scope and self._api_key:
-            hive_id = scope.removeprefix("hive:")
+        effective_scope = scope or (f"hive:{self._hive_id}" if self._hive_id else None)
+        if effective_scope and self._api_key:
+            hive_id = effective_scope.removeprefix("hive:")
             params = f"q={urllib.parse.quote(query)}&limit={limit}"
             if category:
                 params += f"&category={urllib.parse.quote(category)}"
@@ -487,7 +503,7 @@ class EngramMCPServer:
             memories = cloud_resp.get("results", cloud_resp.get("memories", []))
             return {
                 "query": query,
-                "scope": scope,
+                "scope": effective_scope,
                 "total_results": len(memories),
                 "results": memories,
             }
@@ -680,6 +696,39 @@ class EngramMCPServer:
             return {"success": False, **resp}
         grants = resp.get("grants", [])
         return {"success": True, "hive_id": hive_id, "grants": grants, "total": len(grants)}
+
+    # ── Cloud HTTP ──────────────────────────────────────────────────
+
+    async def _cloud_request(
+        self,
+        method: str,
+        path: str,
+        body: Optional[Dict] = None,
+    ) -> Dict[str, Any]:
+        if not self._api_key:
+            return {"error": "ENGRAM_API_KEY not configured"}
+        url = f"{self._api_url.rstrip('/')}{path}"
+        headers = {
+            "Authorization": f"Bearer {self._api_key}",
+            "Content-Type": "application/json",
+        }
+
+        def _do_request() -> Dict[str, Any]:
+            data = json.dumps(body).encode() if body is not None else None
+            req = urllib.request.Request(url, data=data, headers=headers, method=method)
+            try:
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    return json.loads(resp.read().decode())
+            except urllib.error.HTTPError as e:
+                try:
+                    detail = json.loads(e.read().decode())
+                except Exception:
+                    detail = {}
+                return {"error": e.reason, "status": e.code, **detail}
+            except Exception as exc:
+                return {"error": str(exc)}
+
+        return await asyncio.to_thread(_do_request)
 
 
 async def main():
