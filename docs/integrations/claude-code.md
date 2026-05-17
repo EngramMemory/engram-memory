@@ -17,7 +17,7 @@ This page covers the CLI (`claude`). For the desktop app, see
   (grab one at [https://engrammemory.ai](https://engrammemory.ai))
 - Bridge installed:
   ```bash
-  cd engram-memory-community
+  cd engram-memory
   pip install -e ./bridge
   ```
 - Config file at `~/.engram/config.yaml` with a valid `api_key`.
@@ -157,7 +157,7 @@ Claude Code speaks MCP. You can register the Engram MCP server in
 addition to (or instead of) the bridge's `SessionStart` hook:
 
 ```bash
-claude mcp add engrammemory -- python /path/to/engram-memory-community/mcp/server.py
+claude mcp add engrammemory -- python /path/to/engram-memory/mcp/server.py
 ```
 
 The server ([`mcp/server.py`](../../mcp/server.py)) exposes seven

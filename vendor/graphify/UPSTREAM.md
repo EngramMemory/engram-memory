@@ -4,7 +4,7 @@
 - Commit:   9c04b059bec494f524b9ee852f0af4d3aa04bf3d
 - Pulled:   2026-04-14
 
-Vendored in-tree so `engram-memory-community` ships `/graph` as a
+Vendored in-tree so `engram-memory` ships `/graph` as a
 first-class feature with no external PyPI install step. Credit to
 Safi Shamsi. Original MIT license preserved at
 `vendor/graphify/LICENSE`.

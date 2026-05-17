@@ -14,7 +14,7 @@ Engram v2024.3 introduces scalar quantization for 4x memory reduction with no re
 Quantization is automatically enabled when you run:
 
 ```bash
-cd engram-memory-community
+cd engram-memory
 bash scripts/setup.sh
 ```
 
@@ -64,7 +64,7 @@ curl "http://localhost:6333/collections/agent-memory/points/scroll" \
 curl -X DELETE http://localhost:6333/collections/agent-memory
 
 # 3. Recreate with quantization (run setup script)
-cd engram-memory-community
+cd engram-memory
 bash scripts/setup.sh
 
 # 4. Restore memories

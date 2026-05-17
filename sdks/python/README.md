@@ -199,7 +199,7 @@ See `examples/` for runnable end-to-end snippets.
 ## Links
 
 - API reference: [engrammemory.ai/docs](https://engrammemory.ai/docs)
-- Main community repo: [engram-memory/engram-memory-community](https://github.com/engram-memory/engram-memory-community)
+- Main community repo: [EngramMemory/engram-memory](https://github.com/EngramMemory/engram-memory)
 - Bridge daemon: `../../bridge/` in this repo (same cloud API, different surface)
 
 ## License

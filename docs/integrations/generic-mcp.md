@@ -19,7 +19,7 @@ plugin, exactly as it does for every other agent.
   (grab one at [https://engrammemory.ai](https://engrammemory.ai))
 - Bridge installed:
   ```bash
-  cd engram-memory-community
+  cd engram-memory
   pip install -e ./bridge
   ```
 - `~/.engram/config.yaml` with a valid `api_key`:
@@ -52,7 +52,7 @@ always looks the same. Tell your client to launch Python with
     "engrammemory": {
       "command": "python",
       "args": [
-        "/absolute/path/to/engram-memory-community/mcp/server.py"
+        "/absolute/path/to/engram-memory/mcp/server.py"
       ],
       "env": {
         "QDRANT_URL": "http://localhost:6333",
@@ -205,7 +205,7 @@ MCP-specific checks:
 - If your client can't connect to `engrammemory`, run the server
   by hand to see its startup log:
   ```bash
-  python /path/to/engram-memory-community/mcp/server.py
+  python /path/to/engram-memory/mcp/server.py
   ```
   You should see lines like `Engram MCP Server initialized`,
   `Qdrant: http://localhost:6333`, and `Recall engine warmed up`.

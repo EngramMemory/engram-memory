@@ -94,6 +94,31 @@
       }
     },
     {
+      "name": "memory_ingest",
+      "description": "Ingest a file (PDF, DOCX, Markdown, or plain text) into memory. Splits the file into chunks and stores each as a searchable memory with the source filename tracked.",
+      "implementation": "python_exec",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Absolute or relative path to the file to ingest"
+          },
+          "category": {
+            "type": "string",
+            "enum": ["preference", "fact", "decision", "entity", "goal", "plan", "error", "insight", "skill", "event", "question", "relationship", "other"],
+            "default": "fact",
+            "description": "Memory category for all chunks from this file"
+          }
+        },
+        "required": ["path"]
+      },
+      "command": {
+        "script": "plugin.py",
+        "args": ["memory_ingest", "{\"path\": \"{path}\", \"category\": \"{category}\"}"]
+      }
+    },
+    {
       "name": "context_search",
       "description": "Search the current project's .context/ files for information about architecture, patterns, APIs, and workflows",
       "implementation": "python_exec",

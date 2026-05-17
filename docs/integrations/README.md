@@ -104,7 +104,7 @@ Every agent doc assumes:
    Grab one from [https://engrammemory.ai](https://engrammemory.ai).
 2. You've installed the bridge:
    ```bash
-   cd engram-memory-community
+   cd engram-memory
    pip install -e ./bridge
    ```
 3. You've written a config template and pasted your key:

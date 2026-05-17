@@ -135,7 +135,7 @@ class EngramMCPServer:
                             "text": {"type": "string", "description": "Text content to store"},
                             "category": {
                                 "type": "string",
-                                "enum": ["preference", "fact", "decision", "entity", "other"],
+                                "enum": ["decision", "preference", "goal", "plan", "error", "insight", "skill", "event", "question", "relationship", "fact", "entity", "other"],
                                 "default": "other",
                                 "description": "Memory category",
                             },
@@ -172,7 +172,7 @@ class EngramMCPServer:
                             "limit": {"type": "integer", "default": 10, "description": "Max results"},
                             "category": {
                                 "type": "string",
-                                "enum": ["preference", "fact", "decision", "entity", "other"],
+                                "enum": ["decision", "preference", "goal", "plan", "error", "insight", "skill", "event", "question", "relationship", "fact", "entity", "other"],
                                 "description": "Filter by category",
                             },
                             "detail": {
@@ -225,7 +225,7 @@ class EngramMCPServer:
                             },
                             "category": {
                                 "type": "string",
-                                "enum": ["preference", "fact", "decision", "entity", "other"],
+                                "enum": ["decision", "preference", "goal", "plan", "error", "insight", "skill", "event", "question", "relationship", "fact", "entity", "other"],
                                 "description": "Filter by category",
                             },
                             "limit": {
@@ -233,6 +233,14 @@ class EngramMCPServer:
                                 "default": 20,
                                 "maximum": 50,
                                 "description": "Maximum results (default 20, max 50)",
+                            },
+                            "from_date": {
+                                "type": "string",
+                                "description": "ISO 8601 start date (e.g. 2026-05-10 or 2026-05-10T09:00:00). Overrides 'hours' if provided.",
+                            },
+                            "to_date": {
+                                "type": "string",
+                                "description": "ISO 8601 end date. Defaults to now if from_date is set.",
                             },
                         },
                     },
@@ -328,6 +336,27 @@ class EngramMCPServer:
                             "query": {"type": "string", "description": "Search to find the memory first"},
                             "max_connections": {"type": "integer", "default": 3, "description": "Max connections to discover"},
                         },
+                    },
+                ),
+                Tool(
+                    name="memory_answer",
+                    title="Answer from Memory",
+                    description="Answer a question using stored memories. If ENGRAM_API_KEY is configured, synthesizes a full answer via the Engram Cloud API. Without a key, returns the relevant memory context.",
+                    annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False),
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "question": {
+                                "type": "string",
+                                "description": "The question to answer from stored memories",
+                            },
+                            "limit": {
+                                "type": "integer",
+                                "default": 8,
+                                "description": "Max memories to retrieve for context (default 8)",
+                            },
+                        },
+                        "required": ["question"],
                     },
                 ),
                 Tool(
@@ -438,6 +467,8 @@ class EngramMCPServer:
                 result = await self._handle_hive_revoke(**arguments)
             elif name == "hive_grants_list":
                 result = await self._handle_hive_grants_list(**arguments)
+            elif name == "memory_answer":
+                result = await self._handle_memory_answer(arguments)
             else:
                 raise ValueError(f"Unknown tool: {name}")
 
@@ -653,11 +684,89 @@ class EngramMCPServer:
         category = arguments.get("category")
         limit = min(arguments.get("limit", 20), 50)
 
-        results = await self.engine.timeline(hours=hours, category=category, limit=limit)
+        from_ts = None
+        to_ts = None
+        if from_date := arguments.get("from_date"):
+            from_ts = EngramRecallEngine.parse_date(from_date)
+        if to_date := arguments.get("to_date"):
+            to_ts = EngramRecallEngine.parse_date(to_date)
+
+        results = await self.engine.timeline(
+            hours=hours,
+            category=category,
+            limit=limit,
+            from_ts=from_ts,
+            to_ts=to_ts,
+        )
         return {
             "hours": hours,
             "total_results": len(results),
             "results": [r.to_compact_dict() for r in results],
+        }
+
+    async def _handle_memory_answer(self, arguments: dict) -> Dict[str, Any]:
+        """Handle memory_answer tool calls."""
+        question = arguments.get("question", "").strip()
+        if not question:
+            return {"success": False, "error": "question is required"}
+
+        limit = min(int(arguments.get("limit", 8)), 20)
+
+        try:
+            results = await self.engine.search(query=question, top_k=limit)
+        except Exception as e:
+            return {"success": False, "error": f"Memory search failed: {e}"}
+
+        if not results:
+            return {
+                "success": True,
+                "answer": None,
+                "message": "No relevant memories found for this question.",
+                "memories": [],
+            }
+
+        context_texts = [r.content for r in results]
+
+        if self._api_key:
+            try:
+                payload = json.dumps({
+                    "question": question,
+                    "context": context_texts,
+                }).encode()
+                req = urllib.request.Request(
+                    f"{self._api_url.rstrip('/')}/v1/intelligence/answer",
+                    data=payload,
+                    headers={
+                        "Authorization": f"Bearer {self._api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    method="POST",
+                )
+
+                def _do_cloud():
+                    with urllib.request.urlopen(req, timeout=15) as resp:
+                        return json.loads(resp.read().decode())
+
+                data = await asyncio.to_thread(_do_cloud)
+                return {
+                    "success": True,
+                    "answer": data.get("answer", ""),
+                    "memories_used": len(context_texts),
+                    "source": "cloud",
+                }
+            except Exception:
+                pass
+
+        context_block = "\n\n".join(
+            f"[{r.category}] {r.content}" for r in results
+        )
+        return {
+            "success": True,
+            "answer": None,
+            "context": context_block,
+            "memories_used": len(context_texts),
+            "source": "local",
+            "note": "Set ENGRAM_API_KEY to enable cloud answer synthesis.",
         }
 
     # ── Hive Handlers ───────────────────────────────────────────────

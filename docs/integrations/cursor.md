@@ -25,7 +25,7 @@ behavior is replaced by two things you do explicitly:
   (grab one at [https://engrammemory.ai](https://engrammemory.ai))
 - Bridge installed:
   ```bash
-  cd engram-memory-community
+  cd engram-memory
   pip install -e ./bridge
   ```
 - `~/.engram/config.yaml` with a valid `api_key`:
@@ -57,7 +57,7 @@ at [`mcp/server.py`](../../mcp/server.py) inside this repo:
     "engrammemory": {
       "command": "python",
       "args": [
-        "/absolute/path/to/engram-memory-community/mcp/server.py"
+        "/absolute/path/to/engram-memory/mcp/server.py"
       ],
       "env": {
         "QDRANT_URL": "http://localhost:6333",

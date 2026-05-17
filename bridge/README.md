@@ -29,7 +29,7 @@ pulls context at session start. Hives are access groups managed via
 ### From source (community repo)
 
 ```bash
-cd engram-memory-community
+cd engram-memory
 pip install -e ./bridge
 ```
 
@@ -67,7 +67,7 @@ projects:
   # Per-project overrides, keyed by project_id (usually the git
   # repo basename):
   #
-  # engram-memory-community:
+  # engram-memory:
   #   top_k: 12
 ```
 

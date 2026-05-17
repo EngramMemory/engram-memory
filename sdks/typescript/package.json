@@ -6,7 +6,7 @@
   "homepage": "https://engrammemory.ai",
   "repository": {
     "type": "git",
-    "url": "https://github.com/engram-memory/engram-memory-community.git",
+    "url": "https://github.com/EngramMemory/engram-memory.git",
     "directory": "sdks/typescript"
   },
   "keywords": [

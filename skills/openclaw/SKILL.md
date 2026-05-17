@@ -448,7 +448,7 @@ memory_recall("recent changes", days_back=30)
 
 Found a bug or want to add features? 
 
-- **GitHub:** [engram-memory-community](https://github.com/EngramMemory/engram-memory-community)
+- **GitHub:** [engram-memory](https://github.com/EngramMemory/engram-memory)
 - **Issues:** Report bugs and feature requests
 - **Docs:** Help improve documentation
 - **Examples:** Share usage patterns

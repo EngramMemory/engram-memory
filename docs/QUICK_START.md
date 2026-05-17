@@ -15,8 +15,8 @@ Get Engram running in under 5 minutes.
 clawhub install engrammemory
 
 # Or clone directly
-git clone https://github.com/EngramMemory/engram-memory-community.git
-cd engram-memory-community
+git clone https://github.com/EngramMemory/engram-memory.git
+cd engram-memory
 ```
 
 ## Step 2: Setup

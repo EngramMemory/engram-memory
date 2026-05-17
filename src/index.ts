@@ -62,10 +62,18 @@ const SKIP_PATTERNS = /^(hi|hey|hello|ok|okay|thanks|ty|yes|no|sure|yep|nah|k|lo
 
 // Category detection patterns
 const CATEGORY_PATTERNS: Record<string, RegExp> = {
-  preference: /\b(prefer|like|always|never|want|love|hate|enjoy|favor|rather)\b/i,
-  decision: /\b(decided|chosen|selected|will use|going with|switched to|moved to|picking)\b/i,
-  fact: /\b(completed|version|status|count|running|deployed|migrated|installed|updated|is at|currently)\b/i,
-  entity: /\b(company|team|person|project|service|app|platform|organization)\b/i,
+  decision:     /\b(decided|chosen|selected|will use|going with|switched to|moved to|picking|opted for|committed to|approved|rejected|went with|agreed to|adopted|deprecated|migrated to)\b/i,
+  preference:   /\b(prefer|like|always|never|want|love|hate|enjoy|favor|rather|choose to|tend to|usually|my favorite|i always|strongly preferred|mandatory)\b/i,
+  goal:         /\b(goal|objective|target|aim|milestone|want to achieve|trying to|working toward|by end of|need to finish|deadline|ship by|launch|roadmap|OKR|KPI)\b/i,
+  plan:         /\b(plan|strategy|approach|roadmap|next step|will do|going to|schedule|sprint|phase|rollout|timeline|proposal)\b/i,
+  error:        /\b(error|bug|issue|broke|failed|crash|exception|stack trace|wrong|incorrect|broken|regression|incident|outage|root cause|fix needed)\b/i,
+  insight:      /\b(realized|noticed|discovered|learned|found that|turns out|key insight|pattern|interesting|observation|in retrospect|lesson|takeaway|conclusion)\b/i,
+  skill:        /\b(knows how to|can|expert in|proficient|familiar with|experienced with|trained in|certified|specializes in|good at|fluent in|mastered)\b/i,
+  event:        /\b(meeting|call|demo|launch|release|deploy|shipped|presentation|interview|review|ceremony|standup|retrospective|happened|occurred|took place|scheduled)\b/i,
+  question:     /\b(why|how|what|when|where|who|wondering|unclear|need to know|to be determined|TBD|open question|investigate|figure out)\b/i,
+  relationship: /\b(reports to|manages|works with|partner|collaborator|stakeholder|owns|responsible for|depends on|integrated with|blocked by|supports|mentors)\b/i,
+  fact:         /\b(completed|version|status|count|running|deployed|migrated|installed|updated|currently|uses|located|configured|set to|costs|port|hosted|stores|contains|supports)\b/i,
+  entity:       /\b(company|team|person|project|service|app|platform|organization|department|manager|lead|owner|maintainer|vendor|client|VP|CTO|CEO|engineer)\b/i,
 };
 
 // ─── Credential Patterns (never store these) ────────────────────────

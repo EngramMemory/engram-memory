@@ -60,7 +60,7 @@ def memory_store(text: str, category: str = "other", importance: float = 0.5, me
         return _fallback_store(text, category, importance, metadata)
 
     async def _store(engine):
-        doc_id, resolved_category = await engine.store(content=text, category=category, metadata={"importance": importance, **(metadata or {})})
+        doc_id, resolved_category, conflicts = await engine.store(content=text, category=category, metadata={"importance": importance, **(metadata or {})})
         return {"success": True, "data": {"memory_id": doc_id, "text": text, "category": resolved_category}}
 
     return asyncio.run(_run_with_engine(_store))
@@ -115,6 +115,46 @@ def memory_forget(query: str = None, memory_id: str = None) -> Dict[str, Any]:
         return {"success": False, "error": "Provide query or memory_id"}
 
     return asyncio.run(_run_with_engine(_forget))
+
+
+def memory_ingest(path: str, category: str = "fact") -> Dict[str, Any]:
+    """Ingest a file (PDF, DOCX, MD, TXT) into memory as chunked entries."""
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src", "recall"))
+    try:
+        from file_ingest import ingest_file
+    except ImportError as e:
+        return {"success": False, "error": f"file_ingest module unavailable: {e}"}
+    try:
+        chunks = ingest_file(path)
+    except (FileNotFoundError, ImportError, Exception) as e:
+        return {"success": False, "error": str(e)}
+
+    if not chunks:
+        return {"success": False, "error": "No content extracted from file"}
+
+    stored = []
+    errors = []
+    for chunk in chunks:
+        result = memory_store(
+            text=chunk["text"],
+            category=category,
+            metadata={"source_file": chunk["source"], "chunk_index": chunk["chunk_index"]},
+        )
+        if result.get("success"):
+            stored.append(result["data"]["memory_id"])
+        else:
+            errors.append(result.get("error", "unknown"))
+
+    return {
+        "success": len(stored) > 0,
+        "data": {
+            "file": path,
+            "chunks_total": len(chunks),
+            "chunks_stored": len(stored),
+            "memory_ids": stored,
+            "errors": errors,
+        },
+    }
 
 
 # ── Fallbacks (if recall engine unavailable) ─────────────────────
@@ -206,6 +246,12 @@ def handle_tool_call(tool_name: str, parameters: Dict[str, Any]) -> Dict[str, An
                 query=parameters.get("query"),
                 memory_id=parameters.get("memory_id"),
             )
+        elif tool_name == "memory_ingest":
+            result = memory_ingest(
+                path=parameters.get("path", ""),
+                category=parameters.get("category", "fact"),
+            )
+            return result
         elif tool_name == "context_search":
             return context_search(
                 query=parameters["query"],

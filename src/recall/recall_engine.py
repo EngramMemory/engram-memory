@@ -71,10 +71,18 @@ _STOPWORDS = frozenset({
 })
 
 _CATEGORY_PATTERNS = {
-    "decision": re.compile(r"\b(decided|chose|chosen|selected|will use|going with|switched to|moved to|picking|we chose|opted for|committed to|approved|rejected|went with|agreed to|adopted|deprecated|migrated to)\b", re.IGNORECASE),
-    "preference": re.compile(r"\b(prefer|like|always|never|want|love|hate|enjoy|favor|rather|choose to|tend to|usually|my favorite|i always|strongly preferred|mandatory|over spaces|over tabs)\b", re.IGNORECASE),
-    "fact": re.compile(r"\b(completed|version|status|count|runs|running|deployed|migrated|installed|updated|is at|currently|uses|located|configured|set to|costs|takes|measures|port|hosted|serves|stores|contains|supports|weighs|amounts|totals|averages|scheduled|launches?|occurs?|recurring|window|every \w+day|founded|has \d+|pays?\b|expires?|limit|rate|coverage|takes approximately|on port)\b", re.IGNORECASE),
-    "entity": re.compile(r"\b(company|team|person|project|service|app|platform|organization|department|manager|lead|owner|maintainer|vendor|client|VP|CTO|CEO|engineer)\b", re.IGNORECASE),
+    "decision":     re.compile(r"\b(decided|chose|chosen|selected|will use|going with|switched to|moved to|picking|we chose|opted for|committed to|approved|rejected|went with|agreed to|adopted|deprecated|migrated to)\b", re.IGNORECASE),
+    "preference":   re.compile(r"\b(prefer|like|always|never|want|love|hate|enjoy|favor|rather|choose to|tend to|usually|my favorite|i always|strongly preferred|mandatory|over spaces|over tabs)\b", re.IGNORECASE),
+    "goal":         re.compile(r"\b(goal|objective|target|aim|milestone|want to achieve|trying to|working toward|by end of|need to finish|deadline|ship by|launch|roadmap|OKR|KPI)\b", re.IGNORECASE),
+    "plan":         re.compile(r"\b(plan|strategy|approach|roadmap|next step|will do|going to|schedule|sprint|phase|rollout|timeline|proposal|architecture decision)\b", re.IGNORECASE),
+    "error":        re.compile(r"\b(error|bug|issue|broke|failed|crash|exception|stack trace|wrong|incorrect|broken|regression|incident|outage|root cause|fix needed|traceback)\b", re.IGNORECASE),
+    "insight":      re.compile(r"\b(realized|noticed|discovered|learned|found that|turns out|key insight|pattern|interesting|observation|in retrospect|lesson|takeaway|conclusion)\b", re.IGNORECASE),
+    "skill":        re.compile(r"\b(knows how to|can|expert in|proficient|familiar with|experienced with|trained in|certified|specializes in|good at|fluent in|mastered)\b", re.IGNORECASE),
+    "event":        re.compile(r"\b(meeting|call|demo|launch|release|deploy|shipped|presentation|interview|review|ceremony|standup|retrospective|happened|occurred|took place|scheduled)\b", re.IGNORECASE),
+    "question":     re.compile(r"\b(why|how|what|when|where|who|wondering|unclear|need to know|to be determined|TBD|open question|investigate|figure out)\b", re.IGNORECASE),
+    "relationship": re.compile(r"\b(reports to|manages|works with|partner|collaborator|stakeholder|owns|responsible for|depends on|integrated with|blocked by|supports|mentors)\b", re.IGNORECASE),
+    "fact":         re.compile(r"\b(completed|version|status|count|runs|running|deployed|migrated|installed|updated|is at|currently|uses|located|configured|set to|costs|takes|measures|port|hosted|serves|stores|contains|supports|weighs|amounts|totals|averages|scheduled|launches?|occurs?|recurring|window|every \w+day|founded|has \d+|pays?\b|expires?|limit|rate|coverage|takes approximately|on port)\b", re.IGNORECASE),
+    "entity":       re.compile(r"\b(company|team|person|project|service|app|platform|organization|department|manager|lead|owner|maintainer|vendor|client|VP|CTO|CEO|engineer)\b", re.IGNORECASE),
 }
 
 # ─── Privacy ─────────────────────────────────────────────────────────
@@ -418,7 +426,7 @@ class EngramRecallEngine:
     def _local_classify(self, text: str) -> str:
         """Keyword-based category detection with priority ordering.
 
-        Priority: decision > preference > fact > entity > other
+        Priority: decision > preference > goal > plan > error > insight > skill > event > question > relationship > fact > entity > other
         When multiple categories match with equal scores, higher-priority wins.
         """
         scores = {}
@@ -437,6 +445,42 @@ class EngramRecallEngine:
             if scores.get(cat, 0) == max_score:
                 return cat
         return "other"
+
+    async def _check_conflicts(self, content: str, embedding: list, threshold: float = 0.82) -> list:
+        """Search for near-matches that may contradict the new memory."""
+        try:
+            results = await self.search(query=content, top_k=5)
+            conflicts = []
+            for r in results:
+                if r.score < threshold:
+                    continue
+                if r.content.strip().lower() == content.strip().lower():
+                    continue  # exact duplicate, not a conflict
+                # Simple contradiction heuristic: same subject, opposing values
+                # Look for preference/value inversions
+                contradiction_signals = [
+                    # "prefer X" vs "prefer Y" pattern
+                    (r"\bprefer[s]?\s+(\w+)", content.lower(), r.content.lower()),
+                    # negation flip: "always X" vs "never X" or "don't X"
+                    (r"\b(always|never|don't|do not|not)\b", content.lower(), r.content.lower()),
+                ]
+                is_conflict = False
+                for pattern, text_a, text_b in contradiction_signals:
+                    matches_a = re.findall(pattern, text_a)
+                    matches_b = re.findall(pattern, text_b)
+                    if matches_a and matches_b and set(matches_a) != set(matches_b):
+                        is_conflict = True
+                        break
+                if is_conflict:
+                    conflicts.append({
+                        "id": r.doc_id,
+                        "text": r.content,
+                        "score": round(r.score, 3),
+                        "category": r.category,
+                    })
+            return conflicts
+        except Exception:
+            return []
 
     @staticmethod
     def _build_match_context(result: "MemoryResult", query: str) -> str:
@@ -569,12 +613,15 @@ class EngramRecallEngine:
         # Embed (document prefix for storage) — always local, always fast
         vector = await self._embed(content, type="document")
 
+        # Conflict detection: find near-matches that may contradict this memory
+        conflicts = await self._check_conflicts(content, [])
+
         # Cloud extension: compression, dedup, category detection
         # Runs in parallel with local processing, never blocks on failure
         cloud = await self._cloud_intelligence(content)
         if cloud.get("dedup", {}).get("is_duplicate"):
             logger.debug(f"Cloud dedup: skipping duplicate (similarity {cloud['dedup'].get('similarity', '?')})")
-            return doc_id, category  # return ID but don't write — caller sees success
+            return doc_id, category, conflicts  # return ID but don't write — caller sees success
 
         # Local keyword classifier — free, instant, no API needed
         if category == "other":
@@ -637,7 +684,7 @@ class EngramRecallEngine:
                 logger.debug(f"Graph indexing failed: {e}")
 
         logger.debug(f"Stored memory {doc_id}: {content[:80]}...")
-        return doc_id, category
+        return doc_id, category, conflicts
 
     # --- Search (The Three-Tiered Pipeline) ---
 
@@ -1333,18 +1380,47 @@ class EngramRecallEngine:
 
         return results
 
-    async def timeline(self, hours: int = 24, category: str = None, limit: int = 20) -> list:
+    @staticmethod
+    def parse_date(date_str: str) -> float:
+        """Parse ISO 8601 date string to Unix timestamp. Accepts YYYY-MM-DD or full ISO."""
+        from datetime import datetime, timezone
+        for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%d"):
+            try:
+                dt = datetime.strptime(date_str, fmt)
+                return dt.replace(tzinfo=timezone.utc).timestamp()
+            except ValueError:
+                continue
+        raise ValueError(f"Cannot parse date: {date_str!r}")
+
+    async def timeline(
+        self,
+        hours: int = 24,
+        category: str = None,
+        limit: int = 20,
+        from_ts: float = None,
+        to_ts: float = None,
+    ) -> list:
         """Browse recent memories chronologically."""
         import time as _time
+        now = _time.time()
 
-        cutoff = _time.time() - (hours * 3600) if hours > 0 else 0
+        # Explicit timestamps take priority over hours lookback
+        if from_ts is not None or to_ts is not None:
+            range_filter: dict = {}
+            if from_ts is not None:
+                range_filter["gte"] = float(from_ts)
+            if to_ts is not None:
+                range_filter["lte"] = float(to_ts)
+            cutoff_condition = {"key": "created_at", "range": range_filter}
+        elif hours > 0:
+            cutoff = now - (hours * 3600)
+            cutoff_condition = {"key": "created_at", "range": {"gte": cutoff}}
+        else:
+            cutoff_condition = None
 
         must_conditions = []
-        if cutoff > 0:
-            must_conditions.append({
-                "key": "created_at",
-                "range": {"gte": cutoff},
-            })
+        if cutoff_condition:
+            must_conditions.append(cutoff_condition)
         if category:
             must_conditions.append({
                 "key": "category",

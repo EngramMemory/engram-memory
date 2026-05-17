@@ -81,20 +81,24 @@ These caps are real. They exist because [Engram Cloud](https://engrammemory.ai) 
 
 ## What You Get
 
-Seven MCP tools + a visual graph command:
+Twelve MCP tools + a visual graph command, an OpenClaw CLI tool for file ingestion, and a question-answering tool:
 
 | Tool | What it does |
 |---|---|
-| `memory_store` | Save a memory with semantic embedding and auto-classification |
+| `memory_store` | Save a memory with semantic embedding, auto-classification, and conflict detection |
 | `memory_search` | Three-tier recall search with confidence scoring and match context |
 | `memory_recall` | Auto-inject relevant memories into agent context |
 | `memory_forget` | Remove memories by ID or search match |
 | `memory_consolidate` | Find and merge near-duplicate memories |
 | `memory_connect` | Discover cross-category connections via the entity graph |
 | `memory_feedback` | Report which search results were useful — improves future recall |
+| `memory_get` | Fetch one or more memories by UUID |
+| `memory_timeline` | Browse memories chronologically with date-range filtering |
+| `memory_answer` | Answer a question from stored memories, with cloud synthesis when API key is set |
+| `memory_ingest` | Ingest a file (PDF, DOCX, Markdown, plain text) as chunked memories |
 | `/graph` | Generate an interactive visual graph of your memories (Claude Code slash command) |
 
-**Categories:** preference, fact, decision, entity, other — auto-detected by local keyword classifier.
+**Categories:** 13 types — `preference`, `fact`, `decision`, `entity`, `goal`, `plan`, `error`, `insight`, `skill`, `event`, `question`, `relationship`, `other` — auto-detected by local keyword classifier across all surfaces (Python engine, TypeScript plugin, MCP tools).
 
 The recall engine includes a Kuzu-backed entity graph for entity tracking, co-retrieval patterns, spreading activation, and `PREFERRED_OVER` edges from feedback signals. The `/graph` command renders your memory graph as an interactive vis.js visualization — the host LLM does entity extraction, the vendored [graphify](https://github.com/safishamsi/graphify) pipeline handles rendering.
 
@@ -136,8 +140,8 @@ npx -y install-mcp@latest http://localhost:8585/mcp \
 
 **OpenClaw:**
 ```bash
-git clone https://github.com/EngramMemory/engram-memory-community.git
-cd engram-memory-community && bash scripts/install-plugin.sh
+git clone https://github.com/EngramMemory/engram-memory.git
+cd engram-memory && bash scripts/install-plugin.sh
 ```
 
 **Manual (any client)** — add to `.mcp.json`:
@@ -171,6 +175,46 @@ memory_forget(query="old project requirements")
 
 Start a conversation. Tell it something. Close the session. Come back tomorrow. It remembers.
 
+### New in this release
+
+**Conflict detection** — `memory_store` now returns a `conflicts` field when a new memory contradicts an existing one:
+```python
+result = memory_store("User prefers Python over TypeScript")
+# result["conflicts"] → [{"id": "...", "text": "User prefers TypeScript", "score": 0.91}]
+```
+
+**Temporal queries** — browse memories by date or date range:
+```python
+# Last 48 hours
+memory_timeline(hours=48, category="decision")
+
+# Specific date range
+memory_timeline(from_date="2026-05-01", to_date="2026-05-10")
+
+# Everything before a date (point-in-time view)
+memory_timeline(from_date="2026-01-01", to_date="2026-05-01", limit=50)
+```
+
+**File ingestion** — ingest a PDF, DOCX, Markdown, or text file as chunked memories:
+```python
+memory_ingest("/path/to/architecture.pdf", category="fact")
+# Splits into ~500-char chunks, stores each with source_file metadata
+# Supports: .pdf, .docx, .md, .mdx, .txt, .csv, .json, .yaml
+```
+Install optional deps for full format support:
+```bash
+pip install pypdf python-docx
+```
+
+**Answer from memory** — ask a question, get an answer synthesized from your stored memories:
+```python
+# Without ENGRAM_API_KEY — returns relevant memory context
+memory_answer("What database are we using?")
+
+# With ENGRAM_API_KEY — routes to Engram Cloud for full answer synthesis
+memory_answer("What did we decide about the auth system last month?")
+```
+
 ---
 
 ## Architecture
@@ -196,6 +240,62 @@ Start a conversation. Tell it something. Close the session. Come back tomorrow. 
                        └─────────────────────────────────────────────────┘
               One container. Persistent /data volume. Nothing leaves your network.
 ```
+
+---
+
+## What's New
+
+### 13-Type Memory Taxonomy
+
+The original 5 categories (preference, fact, decision, entity, other) have been expanded to 13. The classifier runs locally with no API dependency and detects categories from keywords in the text:
+
+| Category | Detected from |
+|---|---|
+| `decision` | decided, chose, adopted, deprecated, committed to... |
+| `preference` | prefer, love, hate, always, never, favor... |
+| `goal` | goal, objective, milestone, deadline, roadmap, OKR... |
+| `plan` | plan, strategy, next step, sprint, phase, rollout... |
+| `error` | error, bug, broke, failed, crash, regression, incident... |
+| `insight` | realized, discovered, found that, lesson, takeaway... |
+| `skill` | expert in, proficient, familiar with, mastered... |
+| `event` | meeting, demo, launch, shipped, deployed, occurred... |
+| `question` | wondering, unclear, TBD, open question, investigate... |
+| `relationship` | reports to, manages, depends on, blocked by, supports... |
+| `fact` | running on, deployed, version, configured, port... |
+| `entity` | company, team, person, project, service, engineer... |
+
+### Conflict Detection
+
+Every `memory_store` call automatically checks for near-matches (cosine similarity >= 0.82) that may contradict the new memory. Contradictions are detected by comparing preference patterns and negation signals between the new text and existing memories.
+
+The store response includes a `conflicts` array — empty on no conflicts, populated with `{id, text, score, category}` when a contradiction is detected. The memory is still stored; the agent decides how to handle it.
+
+### Temporal Queries
+
+`memory_timeline` now supports absolute date ranges in addition to the `hours` lookback:
+
+- `from_date` / `to_date` — ISO 8601 strings (`YYYY-MM-DD` or `YYYY-MM-DDTHH:MM:SS`)
+- When both are set, `hours` is ignored
+- Useful for point-in-time audits: "what did the agent know before this incident?"
+
+### File Ingestion
+
+`memory_ingest` splits documents into ~500-char overlapping chunks and stores each as a memory with `source_file` and `chunk_index` in the metadata. Supported formats:
+
+| Format | Requirement |
+|---|---|
+| PDF | `pip install pypdf` |
+| DOCX | `pip install python-docx` |
+| Markdown | built-in (frontmatter and HTML stripped) |
+| Plain text / CSV / JSON / YAML | built-in |
+
+Chunks are searchable immediately after ingestion via `memory_search`.
+
+### Answer from Memory
+
+`memory_answer` retrieves the most relevant memories for a question and either:
+- **With `ENGRAM_API_KEY`**: synthesizes a full natural-language answer via Engram Cloud (`/v1/intelligence/answer`)
+- **Without key**: returns the retrieved memories formatted as context for the local LLM to reason over
 
 ---
 

@@ -22,7 +22,7 @@ get a memory for every change aider lands, with no explicit
   (grab one at [https://engrammemory.ai](https://engrammemory.ai))
 - Bridge installed:
   ```bash
-  cd engram-memory-community
+  cd engram-memory
   pip install -e ./bridge
   ```
 - `~/.engram/config.yaml` with a valid `api_key`:

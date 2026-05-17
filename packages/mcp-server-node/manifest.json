@@ -6,7 +6,7 @@
   "author": "EngramMemory",
   "author_url": "https://github.com/EngramMemory",
   "homepage": "https://engrammemory.ai",
-  "repository": "https://github.com/EngramMemory/engram-memory-community",
+  "repository": "https://github.com/EngramMemory/engram-memory",
   "license": "MIT",
   "icon": "https://engrammemory.ai/logo.svg",
   "privacy_policies": [
@@ -14,7 +14,7 @@
   ],
   "contact": {
     "email": "eddy@engrammemory.ai",
-    "support_url": "https://github.com/EngramMemory/engram-memory-community/issues"
+    "support_url": "https://github.com/EngramMemory/engram-memory/issues"
   },
   "tools": [
     {

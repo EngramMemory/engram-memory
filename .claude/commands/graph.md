@@ -52,7 +52,7 @@ Steps:
 6. **Render.** Run the graph script using its absolute path. Try these
    locations in order until one exists:
    - `$ENGRAM_REPO_DIR/scripts/engram_graph.py`
-   - `$HOME/engram-memory-community/scripts/engram_graph.py`
+   - `$HOME/engram-memory/scripts/engram_graph.py`
    - Search with: `find $HOME -maxdepth 3 -name engram_graph.py -path "*/scripts/*" 2>/dev/null | head -1`
    
    Then run:

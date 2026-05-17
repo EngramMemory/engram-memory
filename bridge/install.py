@@ -84,7 +84,7 @@ def _backup(path: Path) -> Optional[Path]:
 
 
 def _repo_root() -> Path:
-    """Find the engram-memory-community repo root."""
+    """Find the engram-memory repo root."""
     here = Path(__file__).resolve().parent
     # bridge/install.py → repo root is parent
     return here.parent

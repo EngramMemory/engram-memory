@@ -64,8 +64,8 @@ In production, **73%+ of queries** are served by the hot-tier after the first we
 
 ```bash
 # Requires Docker
-git clone https://github.com/EngramMemory/engram-memory-community
-cd engram-memory-community
+git clone https://github.com/EngramMemory/engram-memory
+cd engram-memory
 bash scripts/setup.sh
 ```
 
@@ -161,7 +161,7 @@ Mem0 and Supermemory are flat vector stores. Zep is a temporal knowledge graph (
 ### Repo Structure
 
 ```
-engram-memory-community/
+engram-memory/
 ├── src/
 │   ├── recall_engine.py        ← Unified three-tier retrieval pipeline
 │   ├── hot_tier.py             ← Frequency-adjusted exponential decay cache
@@ -300,7 +300,7 @@ ENGRAM_EMBEDDING_URL=http://localhost:11435
 ## Tests
 
 ```bash
-cd engram-memory-community
+cd engram-memory
 python tests/test_three_tiers.py
 ```
 
