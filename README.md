@@ -10,6 +10,7 @@
 ![pypi](https://img.shields.io/pypi/v/engrammemory-ai?label=pypi&color=10b981&style=flat-square)
 ![docs](https://img.shields.io/badge/docs-engrammemory.ai-10b981?style=flat-square)
 ![license](https://img.shields.io/badge/license-BSL--1.1-green?style=flat-square)
+[![SafeSkill 95/100](https://img.shields.io/badge/SafeSkill-95%2F100_Verified%20Safe-brightgreen)](https://safeskill.dev/scan/engrammemory-engram-memory-community)
 
 </div>
 
