@@ -2,7 +2,7 @@
   "name": "engrammemory",
   "display_name": "Engram Memory",
   "description": "Persistent semantic memory for AI agents. Store, search, and recall memories across sessions using a three-tier recall engine (hot cache, hash index, vector search).",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "author": "EngramMemory",
   "author_url": "https://github.com/EngramMemory",
   "homepage": "https://engrammemory.ai",
@@ -65,6 +65,20 @@
       "description": "Discover cross-category connections via the entity graph",
       "readOnlyHint": true,
       "destructiveHint": false
+    },
+    {
+      "name": "memory_graph",
+      "title": "Render Memory Graph",
+      "description": "Render an interactive HTML visualisation of memories from a host-LLM-built {nodes, edges} spec",
+      "readOnlyHint": false,
+      "destructiveHint": false
+    }
+  ],
+  "prompts": [
+    {
+      "name": "graph",
+      "title": "Visualise Memory Graph",
+      "description": "End-to-end /graph workflow: model fetches memories, extracts entities, builds edges, and calls memory_graph to render an interactive HTML page."
     }
   ],
   "examples": [

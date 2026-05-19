@@ -30,7 +30,7 @@ Edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
 }
 ```
 
-Restart Claude Desktop. The 7 memory tools appear automatically.
+Restart Claude Desktop. The memory tools appear automatically.
 
 ## Tools
 
@@ -43,6 +43,13 @@ Restart Claude Desktop. The 7 memory tools appear automatically.
 | **memory_consolidate** | Find and merge near-duplicate memories | destructive |
 | **memory_feedback** | Report which results were useful (improves recall) | write |
 | **memory_connect** | Discover cross-category connections via entity graph | read-only |
+| **memory_graph** | Render a `{nodes, edges}` spec into a self-contained interactive HTML graph (vis.js) | write |
+
+## Prompts
+
+| Prompt | What it does |
+|---|---|
+| **graph** | End-to-end `/graph` workflow: the model fetches memories, extracts entities, builds edges, then calls `memory_graph` to render. Surfaces as `/mcp__engrammemory__graph` in Claude Code. Optional args: `focus` (topic bias), `limit` (max memories). |
 
 ## Configuration
 

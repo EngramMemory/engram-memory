@@ -1,6 +1,6 @@
 {
   "name": "@engrammemory/mcp-server",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Engram Memory MCP server for Claude Desktop and other MCP clients. Persistent semantic memory for AI agents.",
   "author": "EngramMemory <eddy@engrammemory.ai> (https://github.com/EngramMemory)",
   "license": "MIT",

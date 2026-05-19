@@ -14,6 +14,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+import { renderGraph } from "./graph.js";
 
 const ENGRAM_URL = process.env.ENGRAM_URL || "http://localhost:8585";
 
@@ -47,7 +48,7 @@ async function engramGet(endpoint: string): Promise<unknown> {
 
 const server = new McpServer({
   name: "engrammemory",
-  version: "0.1.0",
+  version: "0.2.0",
 });
 
 // ── Tools ───────────────────────────────────────────────────────────
@@ -261,6 +262,158 @@ server.tool(
       params: { name: "memory_timeline", arguments: args },
     });
     return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+  },
+);
+
+server.tool(
+  "memory_graph",
+  "Render an interactive HTML visualisation of memories. Pass a host-LLM-built {nodes, edges} spec; returns the path to a self-contained graph.html (vis.js, no server required). Pair with the 'graph' prompt for end-to-end /graph behaviour.",
+  {
+    nodes: z
+      .array(
+        z.object({
+          id: z.string().describe("Stable identifier (use the memory id)"),
+          label: z.string().describe("Short summary, ≤60 chars"),
+          category: z
+            .string()
+            .optional()
+            .describe("preference | decision | fact | entity | other"),
+          content: z
+            .string()
+            .optional()
+            .describe("First ~200 chars of the memory text"),
+          entities: z
+            .array(z.string())
+            .optional()
+            .describe("Noun phrases / named entities you identified"),
+        }),
+      )
+      .describe("Graph nodes (one per memory)"),
+    edges: z
+      .array(
+        z.object({
+          source: z.string(),
+          target: z.string(),
+          type: z
+            .string()
+            .optional()
+            .describe(
+              "shared-entity | reference | temporal | topic | related",
+            ),
+          label: z.string().optional(),
+          weight: z
+            .number()
+            .min(0)
+            .max(1)
+            .optional()
+            .describe("Confidence 0–1; edges <0.3 are visually de-emphasised"),
+        }),
+      )
+      .default([])
+      .describe("Graph edges (skip weak/uncertain ones)"),
+    title: z
+      .string()
+      .optional()
+      .describe("Page title shown in the legend"),
+    output_dir: z
+      .string()
+      .optional()
+      .describe(
+        "Where to write graph.html (default: ~/.engram/graph-<timestamp>/)",
+      ),
+  },
+  { readOnlyHint: false, destructiveHint: false, title: "Render Memory Graph" },
+  async ({ nodes, edges, title, output_dir }) => {
+    try {
+      const result = renderGraph(
+        { nodes, edges, title },
+        output_dir,
+      );
+      const msg = `Memory graph ready: ${result.htmlPath} — ${result.nodes} nodes, ${result.edges} edges, ${result.communities} communities. Open in a browser to explore.`;
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify(
+              {
+                html_path: result.htmlPath,
+                nodes: result.nodes,
+                edges: result.edges,
+                communities: result.communities,
+                message: msg,
+              },
+              null,
+              2,
+            ),
+          },
+        ],
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return {
+        isError: true,
+        content: [
+          { type: "text" as const, text: `memory_graph failed: ${message}` },
+        ],
+      };
+    }
+  },
+);
+
+// ── Prompts ─────────────────────────────────────────────────────────
+
+server.prompt(
+  "graph",
+  "Build an interactive vis.js graph of your Engram memories. The model does entity extraction; memory_graph renders.",
+  {
+    focus: z
+      .string()
+      .optional()
+      .describe(
+        "Optional topic to bias the recall query (e.g. 'auth refactor'). If omitted, pulls a broad cross-section.",
+      ),
+    limit: z
+      .string()
+      .optional()
+      .describe(
+        "Optional max memories to include (default 1000). Pass as a string.",
+      ),
+  },
+  ({ focus, limit }) => {
+    const focusLine = focus
+      ? `Bias the initial recall query toward: ${focus}.`
+      : "Pull a broad cross-section of memories.";
+    const limitNum = limit ? Number.parseInt(limit, 10) || 1000 : 1000;
+    return {
+      messages: [
+        {
+          role: "user" as const,
+          content: {
+            type: "text" as const,
+            text: [
+              "Build an interactive graph of my Engram memories.",
+              "",
+              focusLine,
+              "",
+              "Steps:",
+              `1. Call memory_search with a broad query (use "${focus || "*"}") and limit=${limitNum} to fetch memories. If that returns nothing, fall back to memory_recall with a broad prompt.`,
+              "2. If zero memories come back, tell me exactly: 'No memories stored yet — store some via the engram MCP tools first.' and stop.",
+              "3. For each memory, build one node: {id, label (≤60 chars summary you write), category, content (first ~200 chars), entities (noun phrases / named entities YOU identify by reading the content — people, projects, technologies, file paths, repos, decisions; lowercase; deduped per node)}.",
+              "4. Build edges by reasoning over the nodes:",
+              "   - Shared entity → {type:'shared-entity', label:<entity>, weight:0.8}",
+              "   - Explicit reference (one names another) → {type:'reference', weight:0.95}",
+              "   - Timestamps within ~10 minutes → {type:'temporal', weight:0.4}",
+              "   - Clear thematic overlap without a shared named entity → {type:'topic', label:<theme>, weight:0.5}",
+              "   Skip edges with weight <0.3. Dedupe symmetric duplicates.",
+              "5. Call memory_graph with {nodes, edges, title}. It writes a self-contained HTML file and returns the path.",
+              "6. Report the path back to me with the node/edge/community counts.",
+              "",
+              "Do not modify the memory store. Do not invent memories. Extraction is read-only.",
+            ].join("\n"),
+          },
+        },
+      ],
+    };
   },
 );
 
