@@ -1,1 +1,0 @@
-{"version": 2, "max_size": 1000, "decay_rate": 0.1, "similarity_threshold": 0.65, "decay_param": 0.5, "retrieval_threshold": -0.5, "noise_param": 0.2, "entries": {}, "stats": {"total_hits": 0, "total_misses": 0, "total_evictions": 0, "total_upserts": 0, "total_decayed": 0}, "saved_at": 1775721141.9115222}

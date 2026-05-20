@@ -30,4 +30,17 @@ coverage/
 
 # Temporary files
 *.tmp
-*.temp__pycache__/
+*.temp
+
+# Python
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+
+# Engram live state
+.engram/
+.engram-test/
+
+# Claude
+.claude/
