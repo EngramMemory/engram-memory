@@ -35,7 +35,9 @@ RUN pip install --no-cache-dir \
         click>=8.0.0 \
         requests>=2.28.0 \
         networkx>=3.0 \
-        mcp
+        mcp \
+        pypdf>=3.0.0 \
+        python-docx>=0.8.11
 
 RUN find /usr/local/lib/python3.12/site-packages -type d \
         \( -name "__pycache__" -o -name "tests" -o -name "test" \

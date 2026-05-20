@@ -204,10 +204,10 @@ async def store(request: Request):
     if not text:
         return JSONResponse({"error": "text is required"}, status_code=400)
     try:
-        doc_id, resolved_category = await mcp_server.engine.store(
+        doc_id, resolved_category, conflicts = await mcp_server.engine.store(
             content=text, category=category, metadata=body.get("metadata")
         )
-        return {"success": True, "memory_id": doc_id, "category": resolved_category}
+        return {"success": True, "memory_id": doc_id, "category": resolved_category, "conflicts": conflicts}
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
 

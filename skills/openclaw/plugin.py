@@ -60,8 +60,8 @@ def memory_store(text: str, category: str = "other", importance: float = 0.5, me
         return _fallback_store(text, category, importance, metadata)
 
     async def _store(engine):
-        doc_id, resolved_category = await engine.store(content=text, category=category, metadata={"importance": importance, **(metadata or {})})
-        return {"success": True, "data": {"memory_id": doc_id, "text": text, "category": resolved_category}}
+        doc_id, resolved_category, conflicts = await engine.store(content=text, category=category, metadata={"importance": importance, **(metadata or {})})
+        return {"success": True, "data": {"memory_id": doc_id, "text": text, "category": resolved_category, "conflicts": conflicts}}
 
     return asyncio.run(_run_with_engine(_store))
 

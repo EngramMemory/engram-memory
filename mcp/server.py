@@ -488,13 +488,13 @@ class EngramMCPServer:
         result: Dict[str, Any] = {"success": False, "error": "Recall engine not available"}
         try:
             if self.engine:
-                doc_id, resolved_category = await self.engine.store(
+                doc_id, resolved_category, conflicts = await self.engine.store(
                     content=text,
                     category=category,
                     metadata={"importance": importance, "private": private},
                 )
                 logger.info(f"Stored memory {doc_id} via recall engine")
-                result = {"success": True, "memory_id": doc_id, "category": resolved_category}
+                result = {"success": True, "memory_id": doc_id, "category": resolved_category, "conflicts": conflicts}
         except Exception as e:
             logger.error(f"Store failed: {e}")
             result = {"success": False, "error": str(e)}
@@ -659,6 +659,8 @@ class EngramMCPServer:
 
     async def _handle_get(self, arguments: dict) -> Dict[str, Any]:
         """Handle memory_get tool calls."""
+        if not self.engine:
+            return {"success": False, "error": "Recall engine not available"}
         memory_id = arguments.get("memory_id")
         memory_ids = arguments.get("memory_ids", [])
 
@@ -680,6 +682,8 @@ class EngramMCPServer:
 
     async def _handle_timeline(self, arguments: dict) -> Dict[str, Any]:
         """Handle memory_timeline tool calls."""
+        if not self.engine:
+            return {"success": False, "error": "Recall engine not available"}
         hours = arguments.get("hours", 24)
         category = arguments.get("category")
         limit = min(arguments.get("limit", 20), 50)
@@ -754,8 +758,8 @@ class EngramMCPServer:
                     "memories_used": len(context_texts),
                     "source": "cloud",
                 }
-            except Exception:
-                pass
+            except Exception as e:
+                logging.warning(f"memory_answer cloud call failed: {e}")
 
         context_block = "\n\n".join(
             f"[{r.category}] {r.content}" for r in results

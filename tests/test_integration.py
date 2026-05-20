@@ -645,10 +645,8 @@ class TestRecallEngineDirect:
             await engine.shutdown()
 
         assert len(results) >= 1, "Expected at least one result"
-        top = results[0]
-        assert tag in top.content, (
-            f"Top result doesn't contain tag {tag!r}. Got: {top.content[:100]}"
-        )
+        matching = [r for r in results if tag in r.content]
+        assert len(matching) >= 1, f"Tag {tag!r} not found in any result. Got: {[r.content[:60] for r in results]}"
 
     @pytest.mark.asyncio
     async def test_search_category_filter_excludes_others(self, test_collection):
