@@ -16,7 +16,7 @@ RUN pip install --no-cache-dir -r requirements.txt && \
 COPY src/recall/ /app/recall/
 
 # Copy MCP server
-COPY mcp/server.py /app/server.py
+COPY mcp/server.py /app/mcp_server.py
 
 # The MCP server reads from stdin/writes to stdout (stdio transport)
 # For Docker, we expose it via a port using SSE transport instead

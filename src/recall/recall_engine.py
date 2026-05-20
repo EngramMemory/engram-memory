@@ -871,7 +871,7 @@ class EngramRecallEngine:
         # Only runs when API key is set AND local results are insufficient.
         # Cloud overflow memories are ones that exceeded local retention or
         # were archived. They get tagged with tier="overflow".
-        if self._cloud_enabled and len(results) < top_k:
+        if self._cloud_enabled and (len(results) == 0 or len(results) < top_k):
             try:
                 overflow = await self._cloud_overflow_search(
                     query_vector, top_k - len(results)

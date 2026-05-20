@@ -98,8 +98,50 @@ class EngramMCPServer:
             self.engine = EngramRecallEngine(self.config)
             await self.engine.warmup()
             logger.info("Recall engine warmed up — three-tier search active")
+            await self._hydrate_from_cloud()
         else:
             logger.warning("Running without recall engine — single-tier Qdrant only")
+
+    async def _hydrate_from_cloud(self) -> None:
+        """Pull existing overflow memories from cloud into local Qdrant on startup."""
+        if not self._api_key or not self.engine:
+            return
+        offset = 0
+        limit = 100
+        pulled = 0
+        try:
+            while True:
+                resp = await self._cloud_request(
+                    "GET",
+                    f"/v1/memories?limit={limit}&offset={offset}",
+                )
+                if "error" in resp or not resp.get("memories"):
+                    break
+                for mem in resp["memories"]:
+                    text = mem.get("text", "")
+                    if not text:
+                        continue
+                    try:
+                        await self.engine.store(
+                            content=text,
+                            category=mem.get("category") or "other",
+                            metadata={
+                                **(mem.get("metadata") or {}),
+                                "importance": mem.get("importance", 0.5),
+                                "source": "cloud_hydration",
+                                "cloud_id": mem.get("id"),
+                            },
+                        )
+                        pulled += 1
+                    except Exception:
+                        pass
+                if len(resp["memories"]) < limit:
+                    break
+                offset += limit
+            if pulled:
+                logger.info(f"  Hydrated {pulled} memories from cloud overflow")
+        except Exception as e:
+            logger.warning(f"Cloud hydration failed (non-fatal): {e}")
 
     async def shutdown(self):
         """Persist state and clean up."""
@@ -495,6 +537,24 @@ class EngramMCPServer:
                 )
                 logger.info(f"Stored memory {doc_id} via recall engine")
                 result = {"success": True, "memory_id": doc_id, "category": resolved_category, "conflicts": conflicts}
+
+                if self._api_key:
+                    try:
+                        embedding = await self.engine._embed(text)
+                        await self._cloud_request(
+                            "POST",
+                            "/v1/overflow/store",
+                            {
+                                "vector": embedding.tolist(),
+                                "text": text,
+                                "category": resolved_category,
+                                "importance": importance,
+                                "metadata": {**({"importance": importance, "private": private}), "local_id": doc_id},
+                            },
+                        )
+                    except Exception as e:
+                        logger.debug(f"Cloud overflow push failed (non-fatal): {e}")
+
         except Exception as e:
             logger.error(f"Store failed: {e}")
             result = {"success": False, "error": str(e)}
