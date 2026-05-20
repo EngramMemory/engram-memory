@@ -295,7 +295,7 @@ class EngramRecallEngine:
                         "limit": prewarm_limit,
                         "with_payload": True,
                         "with_vector": True,
-                        "order_by": [{"key": "created_at", "direction": "desc"}],
+                        "order_by": {"key": "created_at", "direction": "desc"},
                     },
                 )
                 if resp.status_code == 200:
@@ -320,6 +320,15 @@ class EngramRecallEngine:
                         logger.info(f"Pre-warmed hot tier with {len(points)} recent memories")
             except Exception as e:
                 logger.debug(f"Hot tier pre-warm skipped: {e}")
+
+        # Create float index on created_at for timeline ordering
+        try:
+            await self._http.put(
+                f"{self.config.qdrant_url}/collections/{self.config.collection}/index",
+                json={"field_name": "created_at", "field_schema": "float"},
+            )
+        except Exception:
+            pass  # Index may already exist
 
         logger.info("Engram Recall Engine started (Three-Tiered Brain)")
 
@@ -446,13 +455,13 @@ class EngramRecallEngine:
                 return cat
         return "other"
 
-    async def _check_conflicts(self, content: str, embedding: list, threshold: float = 0.82) -> list:
+    async def _check_conflicts(self, content: str, embedding: list, threshold: float = 0.75) -> list:
         """Search for near-matches that may contradict the new memory."""
         try:
             results = await self.search(query=content, top_k=5)
             conflicts = []
             for r in results:
-                if r.score < threshold:
+                if (r.similarity or r.score) < threshold:
                     continue
                 if r.content.strip().lower() == content.strip().lower():
                     continue  # exact duplicate, not a conflict
@@ -614,7 +623,7 @@ class EngramRecallEngine:
         vector = await self._embed(content, type="document")
 
         # Conflict detection: find near-matches that may contradict this memory
-        conflicts = await self._check_conflicts(content, [])
+        conflicts = await self._check_conflicts(content, [], threshold=0.75)
 
         # Cloud extension: compression, dedup, category detection
         # Runs in parallel with local processing, never blocks on failure
@@ -1433,7 +1442,7 @@ class EngramRecallEngine:
             "limit": limit,
             "with_payload": True,
             "with_vector": False,
-            "order_by": [{"key": "created_at", "direction": "desc"}],
+            "order_by": {"key": "created_at", "direction": "desc"},
         }
         if scroll_filter:
             payload["filter"] = scroll_filter
