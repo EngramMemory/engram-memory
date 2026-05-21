@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "engrammemory-ai"
-version = "0.3.0"
+version = "0.4.0"
 description = "Memory infrastructure for AI agents. Your Qdrant, your hardware, our intelligence."
 readme = "README.md"
 requires-python = ">=3.9"

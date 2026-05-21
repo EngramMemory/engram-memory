@@ -38,6 +38,8 @@ from .models import (
     ForgetRequest,
     ForgetResponse,
     HealthResponse,
+    ListMemoriesResponse,
+    MemoryItem,
     SearchRequest,
     SearchResponse,
     SearchResult,
@@ -78,5 +80,7 @@ __all__ = [
     "FeedbackRequest",
     "FeedbackResponse",
     "HiveResponse",
+    "MemoryItem",
+    "ListMemoriesResponse",
     "HealthResponse",
 ]

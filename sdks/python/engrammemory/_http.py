@@ -37,7 +37,7 @@ from .exceptions import (
 # cloud distinguish SDK traffic from bridge traffic and from raw curl,
 # which matters for release telemetry and for targeting deprecation
 # warnings.
-SDK_VERSION = "0.1.0"
+SDK_VERSION = "0.4.0"
 
 DEFAULT_USER_AGENT = "engram-py/{} httpx/{}".format(SDK_VERSION, httpx.__version__)
 

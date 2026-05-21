@@ -1,6 +1,6 @@
 {
   "name": "engram-memory",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Engram Memory Community Edition - Persistent semantic memory for AI agents via Qdrant + FastEmbed",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

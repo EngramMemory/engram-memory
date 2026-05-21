@@ -286,6 +286,54 @@ class HiveResponse:
         return cls(**_strip(cls, raw))
 
 
+# ─── List memories ───────────────────────────────────────────────────
+# /v1/memories (GET) — overflow / bulk listing endpoint
+
+
+@dataclass
+class MemoryItem:
+    """One row returned by ``GET /v1/memories``."""
+
+    id: str
+    text: str
+    category: str
+    importance: float
+    timestamp: str
+    metadata: Optional[Dict[str, Any]] = None
+
+    @classmethod
+    def from_dict(cls, raw: Mapping[str, Any]) -> "MemoryItem":
+        return cls(**_strip(cls, raw))
+
+
+@dataclass
+class ListMemoriesResponse:
+    """Envelope returned by ``GET /v1/memories``.
+
+    ``memories`` is the page of results. ``total`` is the unfiltered
+    count in the collection (useful for pagination UIs).
+    ``next_offset`` is ``None`` when you've reached the last page.
+    """
+
+    memories: List[MemoryItem] = field(default_factory=list)
+    total: int = 0
+    next_offset: Optional[int] = None
+
+    @classmethod
+    def from_dict(cls, raw: Mapping[str, Any]) -> "ListMemoriesResponse":
+        items_raw = raw.get("memories") or []
+        items = [
+            MemoryItem.from_dict(item)
+            for item in items_raw
+            if isinstance(item, Mapping)
+        ]
+        return cls(
+            memories=items,
+            total=int(raw.get("total") or 0),
+            next_offset=raw.get("next_offset"),
+        )
+
+
 # ─── Health ──────────────────────────────────────────────────────────
 # /v1/health (api.py L737-L745)
 
@@ -328,5 +376,7 @@ __all__ = [
     "FeedbackRequest",
     "FeedbackResponse",
     "HiveResponse",
+    "MemoryItem",
+    "ListMemoriesResponse",
     "HealthResponse",
 ]

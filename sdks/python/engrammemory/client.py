@@ -38,6 +38,8 @@ from .models import (
     ForgetRequest,
     ForgetResponse,
     HealthResponse,
+    ListMemoriesResponse,
+    MemoryItem,  # noqa: F401 — re-exported for callers
     SearchRequest,
     SearchResponse,
     StoreRequest,
@@ -168,6 +170,14 @@ def _coerce_hive_list(raw: Any) -> List[HiveResponse]:
     return [HiveResponse.from_dict(item) for item in items if isinstance(item, dict)]
 
 
+def _coerce_list_memories_response(raw: Any) -> ListMemoriesResponse:
+    if not isinstance(raw, dict):
+        raise EngramValidationError(
+            "Expected a JSON object from /v1/memories, got {}".format(type(raw).__name__)
+        )
+    return ListMemoriesResponse.from_dict(raw)
+
+
 def _coerce_health_response(raw: Any) -> HealthResponse:
     if not isinstance(raw, dict):
         raise EngramValidationError(
@@ -263,6 +273,25 @@ class EngramClient:
         )
         raw = self._transport.request("POST", "/v1/store", json_body=req.to_payload())
         return _coerce_store_response(raw)
+
+    def list_memories(
+        self,
+        limit: int = 50,
+        offset: int = 0,
+        category: Optional[str] = None,
+    ) -> ListMemoriesResponse:
+        """Page through stored memories via ``GET /v1/memories``.
+
+        ``limit`` and ``offset`` control pagination. ``category``
+        narrows results to a single category. Use ``next_offset`` from
+        the response to advance to the next page — ``None`` means you
+        have reached the last page.
+        """
+        params: Dict[str, Any] = {"limit": limit, "offset": offset}
+        if category is not None:
+            params["category"] = category
+        raw = self._transport.request("GET", "/v1/memories", params=params)
+        return _coerce_list_memories_response(raw)
 
     def search(
         self,
@@ -463,6 +492,19 @@ class AsyncEngramClient:
             "POST", "/v1/store", json_body=req.to_payload()
         )
         return _coerce_store_response(raw)
+
+    async def list_memories(
+        self,
+        limit: int = 50,
+        offset: int = 0,
+        category: Optional[str] = None,
+    ) -> ListMemoriesResponse:
+        """Page through stored memories via ``GET /v1/memories``."""
+        params: Dict[str, Any] = {"limit": limit, "offset": offset}
+        if category is not None:
+            params["category"] = category
+        raw = await self._transport.request("GET", "/v1/memories", params=params)
+        return _coerce_list_memories_response(raw)
 
     async def search(
         self,
