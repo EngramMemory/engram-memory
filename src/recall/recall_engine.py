@@ -1454,7 +1454,8 @@ class EngramRecallEngine:
             )
             resp.raise_for_status()
             points = resp.json().get("result", {}).get("points", [])
-        except Exception:
+        except Exception as e:
+            logger.warning(f"timeline query failed: {e}")
             return []
 
         results = []
