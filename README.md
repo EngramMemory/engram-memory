@@ -81,7 +81,7 @@ These caps are real. They exist because [Engram Cloud](https://engrammemory.ai) 
 
 ## What You Get
 
-Twelve MCP tools + a visual graph command, an OpenClaw CLI tool for file ingestion, and a question-answering tool:
+Sixteen MCP tools — eleven core memory tools and five hive-management tools for multi-device sharing — plus a visual graph command:
 
 | Tool | What it does |
 |---|---|
@@ -96,6 +96,11 @@ Twelve MCP tools + a visual graph command, an OpenClaw CLI tool for file ingesti
 | `memory_timeline` | Browse memories chronologically with date-range filtering |
 | `memory_answer` | Answer a question from stored memories, with cloud synthesis when API key is set |
 | `memory_ingest` | Ingest a file (PDF, DOCX, Markdown, plain text) as chunked memories |
+| `hive_list` | List all hives this API key has access to (multi-device shared memory pools) |
+| `hive_create` | Create a new shared hive (`name`, `slug`) |
+| `hive_grant` | Grant another API-key prefix `read` or `readwrite` access to a hive |
+| `hive_revoke` | Revoke a granted key prefix from a hive |
+| `hive_grants_list` | List active grants on a hive |
 | `/graph` | Generate an interactive visual graph of your memories (Claude Code slash command) |
 
 **Categories:** 13 types — `preference`, `fact`, `decision`, `entity`, `goal`, `plan`, `error`, `insight`, `skill`, `event`, `question`, `relationship`, `other` — auto-detected by local keyword classifier across all surfaces (Python engine, TypeScript plugin, MCP tools).
@@ -174,6 +179,16 @@ memory_forget(query="old project requirements")
 ```
 
 Start a conversation. Tell it something. Close the session. Come back tomorrow. It remembers.
+
+### 4. Configure agent behavior (recommended)
+
+Engram is the primary memory layer for any MCP-aware agent — Claude, ChatGPT, Cursor, Perplexity, OpenClaw — and works best when the agent is configured to **save every turn**, **recall before acting**, and trust the **local + cloud dual-write** as the failsafe / hive backbone.
+
+See [`docs/SOUL-RULES.md`](docs/SOUL-RULES.md) for the recommended ruleset. Drop the rules block into your `SOUL.md` / `CLAUDE.md` / equivalent and the agent will use Engram the way it was designed:
+
+- **Turn-by-turn capture** — `memory_store` for both user input and assistant output on every turn.
+- **Local + cloud dual-write** — every store persists locally *and* mirrors to `api.engrammemory.ai` when `ENGRAM_API_KEY` is set. The cloud copy is the failsafe and the hive sync layer; without the key, capture is purely local.
+- **No sidecars, no schedulers, no transcript-tailers.** The existing `memory_store` MCP tool is the only channel — there is nothing else to install or run.
 
 ### New in this release
 
@@ -296,6 +311,22 @@ Chunks are searchable immediately after ingestion via `memory_search`.
 `memory_answer` retrieves the most relevant memories for a question and either:
 - **With `ENGRAM_API_KEY`**: synthesizes a full natural-language answer via Engram Cloud (`/v1/intelligence/answer`)
 - **Without key**: returns the retrieved memories formatted as context for the local LLM to reason over
+
+### Hive Memory (multi-device sharing)
+
+A **hive** is a named shared memory pool that multiple API keys can read from or write to as a single brain. When a hive is active on the local container, every `memory_store` also POSTs the memory to `/v1/hives/{hive_id}/memories`, and every `memory_search` queries the hive in parallel with the local tiers. Result: one memory store callable from **your laptop, your phone, another agent, an IoT device — anywhere an MCP client with a granted key can connect.**
+
+Five MCP tools manage hives end-to-end (all require `ENGRAM_API_KEY`):
+
+```python
+hive_create(name="Edwin's Brain", slug="edwin-brain")
+hive_grant(hive_id="...", key_prefix="eng_live_ab12", permission="readwrite")
+hive_list()              # see hives this key can reach
+hive_grants_list(hive_id="...")
+hive_revoke(hive_id="...", key_prefix="eng_live_ab12")
+```
+
+The active hive is selected via the `/hive` command (file-based, persisted under `DATA_DIR/active_hive`); once activated, all `memory_store` / `memory_search` calls in this container also flow through the hive. See [`docs/HIVE.md`](docs/HIVE.md) for setup, permission model, and the failsafe / device-loss recovery flow.
 
 ---
 
