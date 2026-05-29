@@ -402,6 +402,35 @@ class EngramMCPServer:
                     },
                 ),
                 Tool(
+                    name="memory_ingest",
+                    title="Ingest File",
+                    description="Ingest a file into memory. Supports PDF, DOCX, Markdown, TXT, CSV, JSON, YAML. Chunks the file and stores each chunk as a separate memory.",
+                    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False),
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "path": {
+                                "type": "string",
+                                "description": "Absolute path to the file to ingest",
+                            },
+                            "category": {
+                                "type": "string",
+                                "description": "Category for stored chunks",
+                                "enum": ["decision", "preference", "goal", "plan", "error", "insight", "skill", "event", "question", "relationship", "fact", "entity", "other"],
+                                "default": "fact",
+                            },
+                            "importance": {
+                                "type": "number",
+                                "description": "Importance score (0-1)",
+                                "minimum": 0,
+                                "maximum": 1,
+                                "default": 0.5,
+                            },
+                        },
+                        "required": ["path"],
+                    },
+                ),
+                Tool(
                     name="hive_list",
                     title="List Hives",
                     description="List all hives the authenticated user has access to. Requires ENGRAM_API_KEY.",
@@ -511,6 +540,8 @@ class EngramMCPServer:
                 result = await self._handle_hive_grants_list(**arguments)
             elif name == "memory_answer":
                 result = await self._handle_memory_answer(arguments)
+            elif name == "memory_ingest":
+                result = await self._handle_memory_ingest(arguments)
             else:
                 raise ValueError(f"Unknown tool: {name}")
 
@@ -832,6 +863,53 @@ class EngramMCPServer:
             "source": "local",
             "note": "Set ENGRAM_API_KEY to enable cloud answer synthesis.",
         }
+
+    async def _handle_memory_ingest(self, arguments: dict) -> Dict[str, Any]:
+        """Handle memory_ingest tool calls."""
+        path = arguments.get("path", "")
+        category = arguments.get("category", "fact")
+        importance = float(arguments.get("importance", 0.5))
+
+        if not self.engine:
+            return {"error": "Engine not initialized"}
+
+        try:
+            from src.recall.file_ingest import ingest_file
+        except ImportError:
+            try:
+                import sys as _sys
+                _sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+                from src.recall.file_ingest import ingest_file
+            except ImportError as e:
+                return {"error": f"File ingest dependencies not installed: {e}"}
+
+        try:
+            chunks = ingest_file(path)
+        except FileNotFoundError:
+            return {"error": f"File not found: {path}"}
+        except Exception as e:
+            return {"error": f"Failed to read file: {e}"}
+
+        if not chunks:
+            return {"success": False, "error": "No content extracted from file"}
+
+        stored = 0
+        errors = []
+        for chunk in chunks:
+            try:
+                doc_id, resolved_cat, _ = await self.engine.store(
+                    content=chunk["text"],
+                    category=category,
+                    metadata={"importance": importance, "source_file": chunk["source"], "chunk_index": chunk["chunk_index"]},
+                )
+                stored += 1
+            except Exception as e:
+                errors.append(str(e))
+
+        result = {"success": stored > 0, "chunks_stored": stored, "chunks_total": len(chunks), "file": path}
+        if errors:
+            result["errors"] = errors[:5]
+        return result
 
     # ── Hive Handlers ───────────────────────────────────────────────
 
