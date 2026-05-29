@@ -81,7 +81,7 @@ These caps are real. They exist because [Engram Cloud](https://engrammemory.ai) 
 
 ## What You Get
 
-Sixteen MCP tools — eleven core memory tools and five hive-management tools for multi-device sharing — plus a visual graph command:
+Fifteen MCP tools — ten core memory tools and five hive-management tools for multi-device sharing — plus a visual graph command:
 
 | Tool | What it does |
 |---|---|
@@ -95,7 +95,6 @@ Sixteen MCP tools — eleven core memory tools and five hive-management tools fo
 | `memory_get` | Fetch one or more memories by UUID |
 | `memory_timeline` | Browse memories chronologically with date-range filtering |
 | `memory_answer` | Answer a question from stored memories, with cloud synthesis when API key is set |
-| `memory_ingest` | Ingest a file (PDF, DOCX, Markdown, plain text) as chunked memories |
 | `hive_list` | List all hives this API key has access to (multi-device shared memory pools) |
 | `hive_create` | Create a new shared hive (`name`, `slug`) |
 | `hive_grant` | Grant another API-key prefix `read` or `readwrite` access to a hive |
@@ -293,18 +292,11 @@ The store response includes a `conflicts` array — empty on no conflicts, popul
 - When both are set, `hours` is ignored
 - Useful for point-in-time audits: "what did the agent know before this incident?"
 
-### File Ingestion
+### File Ingestion (agent-side)
 
-`memory_ingest` splits documents into ~500-char overlapping chunks and stores each as a memory with `source_file` and `chunk_index` in the metadata. Supported formats:
+The dedicated `memory_ingest` MCP tool was removed — ingestion is now handled agent-side. The agent reads the file, chunks it (~500-char overlapping windows works well), and calls `memory_store` per chunk with `source_file` and `chunk_index` in the metadata. Chunks are searchable immediately via `memory_search`.
 
-| Format | Requirement |
-|---|---|
-| PDF | `pip install pypdf` |
-| DOCX | `pip install python-docx` |
-| Markdown | built-in (frontmatter and HTML stripped) |
-| Plain text / CSV / JSON / YAML | built-in |
-
-Chunks are searchable immediately after ingestion via `memory_search`.
+This keeps the MCP surface minimal and lets each agent choose its own chunking strategy (sentence-aware, semantic, fixed-size, etc.) without the server prescribing one.
 
 ### Answer from Memory
 
