@@ -10,7 +10,7 @@ RUN apt-get update -qq && apt-get install -y --no-install-recommends \
 # Python deps
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt && \
-    pip install --no-cache-dir mcp fastapi uvicorn networkx>=3.0
+    pip install --no-cache-dir mcp fastapi uvicorn networkx>=3.0 pypdf>=3.0.0 python-docx>=0.8.11
 
 # Copy recall engine
 COPY src/recall/ /app/recall/

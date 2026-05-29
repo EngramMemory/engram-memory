@@ -308,7 +308,7 @@ class EngramConsolidator:
                     try:
                         self.engine.graph.conn.execute(
                             "MATCH (m:Memory {id: $mid}), (c:Concept {id: $cid}) "
-                            "MERGE (m)-[:RELATED_TO {weight: 1.0}]->(m)",
+                            "MERGE (m)-[:RELATED_TO {weight: 1.0}]->(c)",
                             {"mid": ids[idx], "cid": concept_id},
                         )
                     except Exception:
